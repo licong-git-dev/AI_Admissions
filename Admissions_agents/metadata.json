@@ -1,0 +1,9 @@
+{
+  "name": "招生智能体集群",
+  "description": "面向学历提升机构的智能招生系统，包含AI内容工厂、线索抓取、微信AI助手及招生管理后台。",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
