@@ -18,8 +18,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { INTENT_COLORS, LEAD_STATUS_OPTIONS, STATUS_LABELS } from '../constants';
-import type { Lead, IntentAnalysis, FollowUpRecord, LeadStatus, EnrollmentRecord, PaymentSummary, ProposalCard } from '../types';
-import { analyzeIntent } from '../gemini-services';
+import type { Lead, IntentAnalysis, FollowUpRecord, LeadStatus, EnrollmentRecord, PaymentSummary, ProposalCard, StudentProfileResult } from '../types';
+import { analyzeIntent, generateStudentProfile } from '../gemini-services';
 import { cn } from '../lib/cn';
 
 interface LeadManagementProps {
@@ -128,6 +128,9 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<IntentAnalysis | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [callPrep, setCallPrep] = useState<StudentProfileResult | null>(null);
+  const [callPrepLoading, setCallPrepLoading] = useState(false);
+  const [callOutcome, setCallOutcome] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leadRequestIdRef = useRef(0);
@@ -753,6 +756,127 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
                     电话联系
                   </button>
                 </div>
+
+                {followUpChannel === 'phone' && selectedLead && (
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-sky-900 flex items-center gap-1.5">
+                        <BrainCircuit className="w-4 h-4" />
+                        电话前 AI 准备
+                      </h4>
+                      <button
+                        onClick={async () => {
+                          if (!selectedLead) return;
+                          setCallPrepLoading(true);
+                          try {
+                            const studentData = `昵称：${selectedLead.nickname}；来源：${selectedLead.source}；意向：${selectedLead.intent}；状态：${STATUS_LABELS[selectedLead.status] || selectedLead.status}；负责人：${selectedLead.assignee}`;
+                            const chatHistory = (followUps.length > 0
+                              ? followUps.slice(0, 5).map((f) => `[${f.channel}] ${f.content}`).join('\n')
+                              : selectedLead.lastMessage || '暂无历史沟通记录');
+                            const result = await generateStudentProfile(studentData, chatHistory, selectedLead.id);
+                            setCallPrep(result);
+                          } catch (err) {
+                            showError(err instanceof Error ? err.message : 'AI 画像生成失败');
+                          } finally {
+                            setCallPrepLoading(false);
+                          }
+                        }}
+                        disabled={callPrepLoading}
+                        className="px-3 py-1 rounded-lg bg-sky-600 text-white text-xs font-bold hover:bg-sky-700 disabled:opacity-50"
+                      >
+                        {callPrepLoading ? '生成中…' : callPrep ? '重新生成' : '一键生成画像'}
+                      </button>
+                    </div>
+
+                    {callPrep ? (
+                      <div className="space-y-2 text-sm">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-lg bg-white p-2 border border-sky-100">
+                            <p className="text-[10px] font-bold text-sky-700 uppercase mb-0.5">意向专业</p>
+                            <p className="text-gray-800">{callPrep.profile.intentMajor}</p>
+                          </div>
+                          <div className="rounded-lg bg-white p-2 border border-sky-100">
+                            <p className="text-[10px] font-bold text-sky-700 uppercase mb-0.5">当前阶段</p>
+                            <p className="text-gray-800">{callPrep.profile.stage}</p>
+                          </div>
+                          <div className="rounded-lg bg-white p-2 border border-sky-100 col-span-2">
+                            <p className="text-[10px] font-bold text-sky-700 uppercase mb-0.5">主要顾虑</p>
+                            <p className="text-gray-800">{callPrep.profile.mainConcerns}</p>
+                          </div>
+                          <div className="rounded-lg bg-white p-2 border border-sky-100 col-span-2">
+                            <p className="text-[10px] font-bold text-sky-700 uppercase mb-0.5">决策关键</p>
+                            <p className="text-gray-800">{callPrep.profile.decisionFactor}</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg bg-white p-3 border border-sky-100 space-y-2">
+                          <p className="text-[10px] font-bold text-sky-700 uppercase">开场话题</p>
+                          <p className="text-sm text-gray-800">{callPrep.callPrep.openingTopic}</p>
+
+                          {callPrep.callPrep.keyPoints.length > 0 && (
+                            <>
+                              <p className="text-[10px] font-bold text-sky-700 uppercase pt-2">沟通要点</p>
+                              <ul className="list-disc list-inside text-xs text-gray-700 space-y-0.5">
+                                {callPrep.callPrep.keyPoints.map((p, i) => (
+                                  <li key={i}>{p}</li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
+
+                          {callPrep.callPrep.objectionHandling.length > 0 && (
+                            <>
+                              <p className="text-[10px] font-bold text-sky-700 uppercase pt-2">异议处理</p>
+                              <div className="space-y-1">
+                                {callPrep.callPrep.objectionHandling.map((item, i) => (
+                                  <div key={i} className="bg-sky-50 rounded px-2 py-1 text-xs">
+                                    <span className="text-sky-700 font-semibold">Q: </span>
+                                    <span className="text-gray-700">{item.objection}</span>
+                                    <br />
+                                    <span className="text-emerald-700 font-semibold">A: </span>
+                                    <span className="text-gray-700">{item.response}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </>
+                          )}
+
+                          <p className="text-[10px] font-bold text-sky-700 uppercase pt-2">收尾动作</p>
+                          <p className="text-sm text-gray-800">{callPrep.callPrep.closingAction}</p>
+                        </div>
+
+                        <div className="rounded-lg bg-white p-2 border border-sky-100">
+                          <label className="text-[10px] font-bold text-sky-700 uppercase">通话结果登记</label>
+                          <textarea
+                            value={callOutcome}
+                            onChange={(e) => setCallOutcome(e.target.value)}
+                            rows={2}
+                            placeholder="通话要点 / 学员反馈 / 下一步动作（保存后会作为跟进记录写入）"
+                            className="w-full mt-1 rounded-lg border border-gray-200 px-2 py-1 text-xs"
+                          />
+                          <button
+                            onClick={() => {
+                              if (callOutcome.trim()) {
+                                setFollowUpChannel('phone');
+                                setFollowUpText(callOutcome);
+                                setCallOutcome('');
+                              }
+                            }}
+                            disabled={!callOutcome.trim()}
+                            className="mt-2 text-[11px] font-bold text-sky-700 hover:text-sky-900 disabled:opacity-40"
+                          >
+                            → 填入跟进记录表单（仍需点下方保存）
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-sky-700">
+                        点击右上角「一键生成画像」，AI 会基于当前学员资料和沟通历史生成电话前准备单，
+                        包含开场话题 / 沟通要点 / 异议处理 / 收尾动作。
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 space-y-3">
                   <div className="flex items-center justify-between">

@@ -32,7 +32,9 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { NAV_ITEMS } from './constants';
 import { cn } from './lib/cn';
+import { authFetch, clearAuth, getUser, getToken, setUser as saveUser, type AuthUser } from './lib/auth';
 import type { DashboardSummary } from './types';
+import Login from './components/Login';
 
 const ContentFactory = lazy(() => import('./components/ContentFactory'));
 const LeadManagement = lazy(() => import('./components/LeadManagement'));
@@ -42,6 +44,12 @@ const PaymentManagement = lazy(() => import('./components/PaymentManagement'));
 const ScheduleManagement = lazy(() => import('./components/ScheduleManagement'));
 const Settings = lazy(() => import('./components/Settings'));
 const StudentPortal = lazy(() => import('./components/StudentPortal'));
+const AcquisitionEngine = lazy(() => import('./components/AcquisitionEngine'));
+const ComplianceCenter = lazy(() => import('./components/ComplianceCenter'));
+const ManagementCenter = lazy(() => import('./components/ManagementCenter'));
+const PlatformConsole = lazy(() => import('./components/PlatformConsole'));
+const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'));
+const HomePanel = lazy(() => import('./components/HomePanel'));
 
 type LeadPreset = {
   searchText?: string;
@@ -70,11 +78,47 @@ export default function App() {
   const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null);
   const [leadPreset, setLeadPreset] = useState<LeadPreset>();
   const [paymentPreset, setPaymentPreset] = useState<PaymentPreset>();
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getUser());
+  const [bootChecked, setBootChecked] = useState(false);
 
   useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setBootChecked(true);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const response = await authFetch('/api/auth/me');
+        const payload = await response.json();
+        if (response.ok && payload.success) {
+          saveUser(payload.data);
+          setCurrentUser(payload.data);
+        } else {
+          clearAuth();
+          setCurrentUser(null);
+        }
+      } catch {
+        clearAuth();
+        setCurrentUser(null);
+      } finally {
+        setBootChecked(true);
+      }
+    })();
+
+    const onExpired = () => {
+      setCurrentUser(null);
+    };
+    window.addEventListener('auth-expired', onExpired);
+    return () => window.removeEventListener('auth-expired', onExpired);
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
     const loadSummary = async () => {
       try {
-        const response = await fetch('/api/dashboard/summary');
+        const response = await authFetch('/api/dashboard/summary');
         const payload = await response.json();
         if (response.ok && payload.success) {
           setDashboardSummary(payload.data as DashboardSummary);
@@ -91,7 +135,24 @@ export default function App() {
     void loadSummary();
     window.addEventListener('dashboard-summary-refresh', handleRefresh);
     return () => window.removeEventListener('dashboard-summary-refresh', handleRefresh);
-  }, []);
+  }, [currentUser]);
+
+  if (!bootChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-400">
+        加载中…
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <Login onLoggedIn={(user) => setCurrentUser(user)} />;
+  }
+
+  const handleLogout = () => {
+    clearAuth();
+    setCurrentUser(null);
+  };
 
   const summaryPerformance = dashboardSummary?.performance ?? PERFORMANCE_DATA;
   const summaryFunnel = dashboardSummary?.funnel ?? FUNNEL_DATA;
@@ -167,7 +228,15 @@ export default function App() {
         </div>
 
         <nav className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => {
+            if (item.id === 'platform') {
+              return currentUser.role === 'admin' && currentUser.tenant === 'platform';
+            }
+            if (item.id === 'compliance' || item.id === 'management') {
+              return currentUser.role === 'admin' || currentUser.role === 'tenant_admin';
+            }
+            return true;
+          }).map((item) => (
             <button
               key={item.id}
               onClick={() => {
@@ -193,12 +262,25 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-white/10">
-          <button className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-gray-400 hover:bg-white/5 hover:text-white transition-all">
-            <div className="w-8 h-8 rounded-full bg-gray-700 shrink-0" />
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-gray-400 hover:bg-white/5 hover:text-white transition-all"
+          >
+            <div className="w-8 h-8 rounded-full bg-gray-700 shrink-0 flex items-center justify-center text-xs font-semibold text-white">
+              {currentUser.name.slice(0, 1)}
+            </div>
             {isSidebarOpen && (
               <div className="flex-1 text-left">
-                <p className="text-xs font-semibold text-white truncate">管理员</p>
-                <p className="text-[10px] opacity-50 truncate">admin@agency.com</p>
+                <p className="text-xs font-semibold text-white truncate">{currentUser.name}</p>
+                <p className="text-[10px] opacity-50 truncate">
+                  {({
+                    admin: '甲方管理员',
+                    tenant_admin: '乙方管理员',
+                    specialist: '招生专员',
+                    student: '学员',
+                  } as const)[currentUser.role]}
+                  {' · '}@{currentUser.username}
+                </p>
               </div>
             )}
             {isSidebarOpen && <LogOut className="w-4 h-4" />}
@@ -270,7 +352,10 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-6"
               >
-                {/* Stats Grid */}
+                {/* 角色化首屏（v3.1 新增） */}
+                <HomePanel onNavigate={(tab) => setActiveTab(tab)} />
+
+                {/* 经典 Stats Grid（保留，作为详细视图） */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   {[
                     { label: '今日新线索', value: String(summaryTodayNewLeads), change: '真实数据', icon: UsersIcon, color: 'text-blue-600' },
@@ -542,6 +627,66 @@ export default function App() {
                 className="h-full"
               >
                 <StudentPortal />
+              </motion.div>
+            )}
+
+            {activeTab === 'acquisition' && (
+              <motion.div
+                key="acquisition"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <AcquisitionEngine />
+              </motion.div>
+            )}
+
+            {activeTab === 'compliance' && (
+              <motion.div
+                key="compliance"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <ComplianceCenter />
+              </motion.div>
+            )}
+
+            {activeTab === 'management' && (
+              <motion.div
+                key="management"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <ManagementCenter />
+              </motion.div>
+            )}
+
+            {activeTab === 'platform' && (
+              <motion.div
+                key="platform"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <PlatformConsole />
+              </motion.div>
+            )}
+
+            {activeTab === 'agent' && (
+              <motion.div
+                key="agent"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <AgentWorkspace />
               </motion.div>
             )}
           </AnimatePresence>

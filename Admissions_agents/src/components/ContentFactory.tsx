@@ -568,9 +568,11 @@ function ContentFactory() {
 
         {activeMainTab === 'calendar' && (
           <motion.div key="calendar" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex-1 space-y-6">
+            <QueuedTasksPanel />
+
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="font-bold text-gray-900">本周发布计划</h3>
+                <h3 className="font-bold text-gray-900">本周发布记录</h3>
                 <button className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold hover:bg-emerald-600 transition-all">
                   <Plus className="w-4 h-4" />
                   新增计划
@@ -689,6 +691,165 @@ function ContentFactory() {
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+type QueuedTask = {
+  id: number;
+  contentId: number | null;
+  accountId: number;
+  type: string;
+  scheduledAt: string;
+  status: string;
+  finishedAt: string | null;
+  platform: string;
+  nickname: string;
+};
+
+type CalendarResponse = {
+  items: Array<{ id: number; title: string; type: string; platforms: string[]; status: string; generatedAt: string; publishedAt: string | null }>;
+  tasks: QueuedTask[];
+  range: { from: string; to: string };
+};
+
+const PLATFORM_ICON: Record<string, string> = {
+  xiaohongshu: '📕',
+  douyin: '🎵',
+  kuaishou: '⚡',
+};
+
+function QueuedTasksPanel() {
+  const [data, setData] = useState<CalendarResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/content/calendar');
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || '加载失败');
+      }
+      setData(payload.data as CalendarResponse);
+      setErrorMsg('');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const shift = async (taskId: number, hours: number) => {
+    const task = data?.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const next = new Date(Date.parse(task.scheduledAt) + hours * 60 * 60 * 1000).toISOString();
+    try {
+      const response = await fetch(`/api/content/tasks/${taskId}/schedule`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduledAt: next }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || '调整失败');
+      }
+      await load();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '调整失败');
+    }
+  };
+
+  const queuedTasks = (data?.tasks ?? []).filter((t) => t.status === 'queued').sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt));
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-bold text-gray-900">待发布任务队列</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            审核通过的内容自动入队。可手动微调时间（±1h / ±3h）避开敏感时段或错峰。
+          </p>
+        </div>
+        <button
+          onClick={() => void load()}
+          disabled={loading}
+          className="text-xs text-gray-500 hover:text-gray-700"
+        >
+          {loading ? '加载中…' : '刷新'}
+        </button>
+      </div>
+
+      {errorMsg && (
+        <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">{errorMsg}</div>
+      )}
+
+      {queuedTasks.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+          当前没有排队中的发布任务。内容审核通过后，Worker 会为选中的平台账号创建发布任务。
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {queuedTasks.map((task) => {
+            const scheduledLocal = new Date(task.scheduledAt).toLocaleString('zh-CN', { hour12: false });
+            const isPast = Date.parse(task.scheduledAt) < Date.now();
+            return (
+              <div key={task.id} className={cn(
+                'flex items-center justify-between p-3 rounded-xl border',
+                isPast ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'
+              )}>
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">{PLATFORM_ICON[task.platform] ?? '📱'}</span>
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">{task.nickname}</div>
+                    <div className="text-xs text-gray-500">
+                      任务 #{task.id}
+                      {task.contentId && ` · 内容 #${task.contentId}`}
+                      {' · '}计划 {scheduledLocal}
+                      {isPast && <span className="ml-1 text-amber-700 font-medium">· 已过期，Worker 会立刻执行</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => void shift(task.id, -3)}
+                    className="px-2 py-1 text-xs text-gray-600 border border-gray-200 rounded hover:bg-white"
+                    title="提前 3 小时"
+                  >
+                    -3h
+                  </button>
+                  <button
+                    onClick={() => void shift(task.id, -1)}
+                    className="px-2 py-1 text-xs text-gray-600 border border-gray-200 rounded hover:bg-white"
+                    title="提前 1 小时"
+                  >
+                    -1h
+                  </button>
+                  <button
+                    onClick={() => void shift(task.id, 1)}
+                    className="px-2 py-1 text-xs text-gray-600 border border-gray-200 rounded hover:bg-white"
+                    title="推迟 1 小时"
+                  >
+                    +1h
+                  </button>
+                  <button
+                    onClick={() => void shift(task.id, 3)}
+                    className="px-2 py-1 text-xs text-gray-600 border border-gray-200 rounded hover:bg-white"
+                    title="推迟 3 小时"
+                  >
+                    +3h
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

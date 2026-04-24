@@ -12,16 +12,26 @@ import {
   Calendar,
   Settings,
   Smartphone,
+  Rocket,
+  ShieldCheck,
+  Briefcase,
+  Globe,
+  Bot,
 } from 'lucide-react';
 
 export const NAV_ITEMS = [
   { id: 'dashboard', label: '数据看板', icon: LayoutDashboard },
+  { id: 'agent', label: 'AI 员工', icon: Bot },
   { id: 'factory', label: '内容工厂', icon: Factory },
+  { id: 'acquisition', label: 'AI 获客', icon: Rocket },
   { id: 'leads', label: '线索管理', icon: Users },
   { id: 'assistant', label: '微信助手', icon: MessageSquare },
   { id: 'students', label: '学员管理', icon: GraduationCap },
   { id: 'payment', label: '缴费管理', icon: CreditCard },
   { id: 'schedule', label: '排课管理', icon: Calendar },
+  { id: 'compliance', label: '合规中心', icon: ShieldCheck },
+  { id: 'management', label: '经营管理', icon: Briefcase },
+  { id: 'platform', label: '平台总控台', icon: Globe },
   { id: 'settings', label: '系统设置', icon: Settings },
   { id: 'portal', label: '学员自助端', icon: Smartphone },
 ];

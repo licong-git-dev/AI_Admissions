@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db';
+import { getTenantScope, resolveTenantForWrite } from '../middleware/tenant';
+import type { AuthedRequest } from '../middleware/auth';
 
 type LeadRow = {
   id: number;
@@ -10,11 +12,19 @@ type LeadRow = {
   last_message: string;
   status: string;
   assignee: string | null;
+  tenant: string;
   created_at: string;
   updated_at: string;
   latest_followup_at: string | null;
   latest_next_action: string | null;
   latest_next_followup_at: string | null;
+};
+
+const isLeadAccessible = (row: LeadRow | undefined, req: AuthedRequest): boolean => {
+  if (!row) return false;
+  const scope = getTenantScope(req);
+  if (scope.isPlatformAdmin) return true;
+  return row.tenant === scope.tenant;
 };
 
 type CreateLeadBody = {
@@ -116,6 +126,7 @@ const LEAD_WITH_LATEST_FOLLOWUP_SELECT = `
     l.last_message,
     l.status,
     l.assignee,
+    l.tenant,
     l.created_at,
     l.updated_at,
     latest.created_at as latest_followup_at,
@@ -133,12 +144,17 @@ const LEAD_WITH_LATEST_FOLLOWUP_SELECT = `
   ) latest ON latest.lead_id = l.id
 `;
 
-const getLeadRow = (id: string) => db
-  .prepare(
-    `${LEAD_WITH_LATEST_FOLLOWUP_SELECT}
-     WHERE l.id = ?`
-  )
-  .get(id) as LeadRow | undefined;
+const getLeadRow = (id: string, req?: AuthedRequest): LeadRow | undefined => {
+  const row = db
+    .prepare(
+      `${LEAD_WITH_LATEST_FOLLOWUP_SELECT}
+       WHERE l.id = ?`
+    )
+    .get(id) as LeadRow | undefined;
+  if (!row) return undefined;
+  if (req && !isLeadAccessible(row, req)) return undefined;
+  return row;
+};
 
 const getEnrollment = (leadId: string) => db.prepare(
   `SELECT id, lead_id as leadId, school_name as schoolName, major_name as majorName, stage, note, created_at as createdAt, updated_at as updatedAt
@@ -191,9 +207,15 @@ const resolveLeadStatusFromPayment = (currentStatus: string, paidAmount: number)
 export const leadsRouter = Router();
 
 leadsRouter.get('/', (req, res) => {
+  const scope = getTenantScope(req as AuthedRequest);
   const { status, source, intent, search, needsFollowup, needsPayment, sortBy } = req.query;
   const filters: string[] = [];
   const params: string[] = [];
+
+  if (!scope.isPlatformAdmin) {
+    filters.push('l.tenant = ?');
+    params.push(scope.tenant);
+  }
 
   if (typeof status === 'string' && status) {
     filters.push('l.status = ?');
@@ -250,16 +272,17 @@ leadsRouter.get('/', (req, res) => {
 });
 
 leadsRouter.get('/:id', (req, res) => {
-  const row = getLeadRow(req.params.id);
-  if (!row) {
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
+  if (!isLeadAccessible(row, req as AuthedRequest)) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
 
-  res.json({ success: true, data: toLead(row), error: null });
+  res.json({ success: true, data: toLead(row!), error: null });
 });
 
 leadsRouter.post('/', (req, res) => {
-  const body = req.body as CreateLeadBody;
+  const scope = getTenantScope(req as AuthedRequest);
+  const body = req.body as CreateLeadBody & { tenant?: string };
   const source = normalizeText(body.source, 50);
   const nickname = normalizeText(body.nickname, 50);
   const contact = normalizeText(body.contact, 100);
@@ -267,6 +290,7 @@ leadsRouter.post('/', (req, res) => {
   const lastMessage = normalizeText(body.lastMessage, 1000);
   const intent = body.intent || 'low';
   const status = body.status || 'new';
+  const tenant = resolveTenantForWrite(scope, body.tenant);
 
   if (!source || !nickname) {
     return res.status(400).json({
@@ -286,8 +310,8 @@ leadsRouter.post('/', (req, res) => {
 
   const result = db
     .prepare(
-      `INSERT INTO leads (source, nickname, contact, intent, last_message, status, assignee, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO leads (source, nickname, contact, intent, last_message, status, assignee, tenant, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     )
     .run(
       source,
@@ -296,7 +320,8 @@ leadsRouter.post('/', (req, res) => {
       intent,
       lastMessage || '',
       status,
-      assignee || null
+      assignee || null,
+      tenant
     );
 
   const created = getLeadRow(String(result.lastInsertRowid));
@@ -304,7 +329,7 @@ leadsRouter.post('/', (req, res) => {
 });
 
 leadsRouter.patch('/:id', (req, res) => {
-  const existing = getLeadRow(req.params.id);
+  const existing = getLeadRow(req.params.id, req as AuthedRequest);
   if (!existing) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -339,12 +364,12 @@ leadsRouter.patch('/:id', (req, res) => {
     req.params.id
   );
 
-  const updated = getLeadRow(req.params.id);
+  const updated = getLeadRow(req.params.id, req as AuthedRequest);
   res.json({ success: true, data: updated ? toLead(updated) : null, error: null });
 });
 
 leadsRouter.get('/:id/follow-ups', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -362,7 +387,7 @@ leadsRouter.get('/:id/follow-ups', (req, res) => {
 });
 
 leadsRouter.post('/:id/follow-ups', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -405,7 +430,7 @@ leadsRouter.post('/:id/follow-ups', (req, res) => {
 });
 
 leadsRouter.post('/:id/follow-up-actions', (req, res) => {
-  const existing = getLeadRow(req.params.id);
+  const existing = getLeadRow(req.params.id, req as AuthedRequest);
   if (!existing) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -450,7 +475,7 @@ leadsRouter.post('/:id/follow-up-actions', (req, res) => {
       req.params.id
     );
 
-    const lead = getLeadRow(req.params.id);
+    const lead = getLeadRow(req.params.id, req as AuthedRequest);
     const followUp = db.prepare(
       `SELECT id, lead_id as leadId, channel, content, next_action as nextAction, next_followup_at as nextFollowupAt, created_at as createdAt
        FROM followups
@@ -470,7 +495,7 @@ leadsRouter.post('/:id/follow-up-actions', (req, res) => {
 });
 
 leadsRouter.get('/:id/enrollment', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -479,7 +504,7 @@ leadsRouter.get('/:id/enrollment', (req, res) => {
 });
 
 leadsRouter.post('/:id/enrollment', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -514,14 +539,14 @@ leadsRouter.post('/:id/enrollment', (req, res) => {
     success: true,
     data: {
       enrollment: getEnrollment(req.params.id) ?? null,
-      lead: toLead(getLeadRow(req.params.id) ?? row),
+      lead: toLead(getLeadRow(req.params.id, req as AuthedRequest) ?? row),
     },
     error: null,
   });
 });
 
 leadsRouter.get('/:id/payment', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -530,7 +555,7 @@ leadsRouter.get('/:id/payment', (req, res) => {
 });
 
 leadsRouter.get('/:id/proposal-card', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -539,7 +564,7 @@ leadsRouter.get('/:id/proposal-card', (req, res) => {
 });
 
 leadsRouter.post('/:id/proposal-card', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -606,7 +631,7 @@ leadsRouter.post('/:id/proposal-card', (req, res) => {
 });
 
 leadsRouter.post('/:id/payment', (req, res) => {
-  const row = getLeadRow(req.params.id);
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!row) {
     return res.status(404).json({ success: false, data: null, error: '线索不存在' });
   }
@@ -645,7 +670,7 @@ leadsRouter.post('/:id/payment', (req, res) => {
     success: true,
     data: {
       payment,
-      lead: toLead(getLeadRow(req.params.id) ?? row),
+      lead: toLead(getLeadRow(req.params.id, req as AuthedRequest) ?? row),
     },
     error: null,
   });

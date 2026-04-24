@@ -1,0 +1,17 @@
+node_modules
+dist
+build
+.git
+.github
+.vscode
+.omc
+.specstory
+*.log
+server/data
+server/logs
+.env
+.env.local
+.env.production
+.DS_Store
+coverage
+.idea

@@ -1,0 +1,73 @@
+version: "3.9"
+
+x-shared-env: &shared-env
+  NODE_ENV: production
+  DB_PATH: /data/admissions.db
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  JWT_SECRET: ${JWT_SECRET}
+  RPA_COOKIES_SECRET: ${RPA_COOKIES_SECRET}
+  WECHATPAY_MCHID: ${WECHATPAY_MCHID:-}
+  WECHATPAY_APPID: ${WECHATPAY_APPID:-}
+  WECHATPAY_API_V3_KEY: ${WECHATPAY_API_V3_KEY:-}
+  WECHATPAY_SERIAL_NO: ${WECHATPAY_SERIAL_NO:-}
+  WECHATPAY_PRIVATE_KEY_PATH: ${WECHATPAY_PRIVATE_KEY_PATH:-}
+  WECHATPAY_NOTIFY_URL: ${WECHATPAY_NOTIFY_URL:-}
+  WECHAT_WORK_CORP_ID: ${WECHAT_WORK_CORP_ID:-}
+  WECHAT_WORK_AGENT_ID: ${WECHAT_WORK_AGENT_ID:-}
+  WECHAT_WORK_APP_SECRET: ${WECHAT_WORK_APP_SECRET:-}
+  WECHAT_WORK_CONTACT_SECRET: ${WECHAT_WORK_CONTACT_SECRET:-}
+  ALIYUN_SMS_ACCESS_KEY_ID: ${ALIYUN_SMS_ACCESS_KEY_ID:-}
+  ALIYUN_SMS_ACCESS_KEY_SECRET: ${ALIYUN_SMS_ACCESS_KEY_SECRET:-}
+  ALIYUN_SMS_SIGN_NAME: ${ALIYUN_SMS_SIGN_NAME:-}
+  ALIYUN_SMS_TEMPLATE_CODE_OTP: ${ALIYUN_SMS_TEMPLATE_CODE_OTP:-}
+  ENABLE_DB_SEED: ${ENABLE_DB_SEED:-false}
+
+services:
+  server:
+    build:
+      context: .
+      target: server
+    container_name: admissions-server
+    restart: unless-stopped
+    environment:
+      <<: *shared-env
+      PORT: 8787
+    volumes:
+      - ./docker/data:/data
+      - ./docker/logs:/app/server/logs
+      - ${WECHATPAY_PRIVATE_KEY_DIR:-./docker/certs}:/etc/admissions:ro
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: admissions-worker
+    restart: unless-stopped
+    environment:
+      <<: *shared-env
+      RPA_HEADLESS: "true"
+      RPA_AUTO_SUBMIT: "false"
+    volumes:
+      - ./docker/data:/data
+      - ./docker/logs:/app/server/logs
+      - ${WECHATPAY_PRIVATE_KEY_DIR:-./docker/certs}:/etc/admissions:ro
+    depends_on:
+      - server
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+    container_name: admissions-frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - server
