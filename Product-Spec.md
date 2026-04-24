@@ -1,6 +1,6 @@
 # 招生智能体集群 - Product Spec
 
-> **当前版本：v3.2（2026-04-24）· 准无人值守版**
+> **当前版本：v3.3.a（2026-04-24）· AI 员工人格化**
 > 完整迭代历史见 [Product-Spec-CHANGELOG.md](./Product-Spec-CHANGELOG.md)
 > 未来演进路径见 [Product-Spec-V3-Roadmap.md](./Product-Spec-V3-Roadmap.md)
 > 运维手册见 [Execute_Plan/Operator-Runbook.md](./Execute_Plan/Operator-Runbook.md)
@@ -13,6 +13,13 @@
 ---
 
 ## v2.2 状态快照
+
+v3.3.a 新增（2026-04-24 · AI 员工人格化 + 乙方老板视角）：
+- ✅ **AI 员工人格化**：三位数字同事有名字、头像、性格、语气（🎯 小招内容岗 / 🕸️ 小线线索岗 / 📊 小报分析岗）
+- ✅ **每日战报**：小报每天 19:00 自动生成第一人称叙事，推送到老板的企业微信；HomePanel 也能手动拉一份
+- ✅ **乙方 Day-1 体验修复**：空数据也有故事讲，`buildTemplate` 规则回退保证"不因配置缺失而沉默"
+- ✅ **quickActions 重构**：mission 带 persona 头像 + 简化文案（原「让 AI 做 X」→ 「小招: 做 X」）
+- ✅ **AgentWorkspace 升级**：mission 卡片展示所属数字员工头像 + 岗位徽章
 
 v3.2 新增（2026-04-24 · 准无人值守）：
 - ✅ **自动审批白名单**：3 个 write_high tool 可配置化免审批（合规通过 / 内部广播 / 前向状态迁移）

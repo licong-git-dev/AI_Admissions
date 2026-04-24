@@ -413,7 +413,7 @@ const submitContentForReview: ToolDefinition = {
     type: 'object',
     properties: {
       title: { type: 'string', description: '标题' },
-      type: { type: 'string', enum: ['policy', 'major', 'case', 'reminder', 'qa'] },
+      type: { type: 'string', description: '内容类型', enum: ['policy', 'major', 'case', 'reminder', 'qa'] },
       platforms: {
         type: 'array',
         items: { type: 'string' } as Record<string, unknown>,
@@ -523,7 +523,7 @@ const updateLeadStatus: ToolDefinition = {
     type: 'object',
     properties: {
       leadId: { type: 'number', description: '线索 ID' },
-      status: { type: 'string', enum: ['new', 'contacted', 'following', 'interested', 'enrolled', 'lost'] },
+      status: { type: 'string', description: '目标状态', enum: ['new', 'contacted', 'following', 'interested', 'enrolled', 'lost'] },
       note: { type: 'string', description: '变更原因' },
     },
     required: ['leadId', 'status'],

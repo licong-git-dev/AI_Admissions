@@ -371,10 +371,27 @@ function MissionDetail({
     <div className="space-y-4">
       <div className="p-4 bg-white border border-gray-200 rounded-lg">
         <div className="flex items-center justify-between">
-          <div>
-            <div className="font-semibold text-gray-900">{mission.title}</div>
-            <div className="text-xs text-gray-500 mt-0.5">
-              #{mission.id} · {mission.type} · tenant={mission.tenant}
+          <div className="flex items-center gap-3">
+            {MISSION_PERSONA[mission.type] && (
+              <div
+                className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl"
+                title={`${MISSION_PERSONA[mission.type].name} · ${MISSION_PERSONA[mission.type].role}`}
+              >
+                {MISSION_PERSONA[mission.type].avatar}
+              </div>
+            )}
+            <div>
+              <div className="font-semibold text-gray-900 flex items-center gap-2">
+                {mission.title}
+                {MISSION_PERSONA[mission.type] && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                    {MISSION_PERSONA[mission.type].name}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                #{mission.id} · {mission.type} · tenant={mission.tenant}
+              </div>
             </div>
           </div>
           {['queued', 'running', 'waiting_approval'].includes(mission.status) && (
@@ -682,6 +699,15 @@ const MISSION_TYPE_LABELS: Record<string, string> = {
   daily_content_sprint: '每日内容冲刺',
   lead_followup_sweep: '线索跟进扫描',
   weekly_report: '周度经营报表',
+  daily_briefing: '今日战报',
+};
+
+// v3.3.a · mission type → persona（与 server/src/services/agent-personas.ts 同步）
+const MISSION_PERSONA: Record<string, { avatar: string; name: string; role: string }> = {
+  daily_content_sprint: { avatar: '🎯', name: '小招', role: '内容岗' },
+  lead_followup_sweep: { avatar: '🕸️', name: '小线', role: '线索岗' },
+  weekly_report: { avatar: '📊', name: '小报', role: '分析岗' },
+  daily_briefing: { avatar: '📊', name: '小报', role: '分析岗' },
 };
 
 function ScheduleSection() {

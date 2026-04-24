@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db';
 import type { AuthedRequest } from '../middleware/auth';
+import { generateBriefing, getLatestBriefing } from '../services/briefing-generator';
+import { AGENT_PERSONAS } from '../services/agent-personas';
 
 const dashboardRouter = Router();
 
@@ -161,9 +163,10 @@ dashboardRouter.get('/home', (req, res) => {
           waitingApproval: missionsWaitingApproval,
         },
         quickActions: [
-          { id: 'mission:daily_content_sprint', label: '让 AI 生成今日 3 条内容' },
-          { id: 'mission:lead_followup_sweep', label: '让 AI 扫描高意向线索' },
-          { id: 'mission:weekly_report', label: '让 AI 出本周报表' },
+          { id: 'mission:daily_content_sprint', label: '生成今日 3 条内容' },
+          { id: 'mission:lead_followup_sweep', label: '扫描高意向线索' },
+          { id: 'mission:daily_briefing', label: '出一份今日战报' },
+          { id: 'mission:weekly_report', label: '出本周经营报表' },
         ],
       },
       error: null,
@@ -386,6 +389,45 @@ dashboardRouter.get('/onboarding', (req, res) => {
     },
     error: null,
   });
+});
+
+// v3.3.a · AI 员工今日战报：GET latest / POST generate
+dashboardRouter.get('/tenant-briefing/latest', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+  const briefing = getLatestBriefing(tenant);
+  res.json({
+    success: true,
+    data: briefing ? { ...briefing, persona: AGENT_PERSONAS[briefing.personaId] } : null,
+    error: null,
+  });
+});
+
+dashboardRouter.post('/tenant-briefing/generate', async (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+  try {
+    const briefing = await generateBriefing(tenant);
+    res.json({
+      success: true,
+      data: { ...briefing, persona: AGENT_PERSONAS[briefing.personaId] },
+      error: null,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, data: null, error: msg });
+  }
+});
+
+// v3.3.a · 暴露 agent personas（前端渲染头像 + 昵称）
+dashboardRouter.get('/agent-personas', (_req, res) => {
+  res.json({ success: true, data: AGENT_PERSONAS, error: null });
 });
 
 export { dashboardRouter };

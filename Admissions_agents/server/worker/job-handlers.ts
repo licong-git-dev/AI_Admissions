@@ -8,6 +8,7 @@ import { logger } from './logger';
 import { sendTextMessageToUser } from '../src/services/wechat-work';
 import { runAgentMission, resumeAgentMission } from './agent-runtime';
 import { getToolByName, isTerminal } from '../src/services/agent-tools';
+import { generateBriefing, markBriefingPushed } from '../src/services/briefing-generator';
 
 // ============== Handlers ==============
 
@@ -104,6 +105,21 @@ registerJobHandler('agent.daily_schedule_tick', async () => {
       continue;
     }
 
+    // 特殊类型：daily_briefing 走独立处理路径（不经过 agent runtime）
+    if (cfg.mission_type === 'daily_briefing') {
+      const dateStr = now.toISOString().slice(0, 10);
+      enqueueJob({
+        name: 'agent.daily_briefing_push',
+        payload: { tenant: cfg.tenant },
+        maxAttempts: 2,
+        singletonKey: `briefing-push:${cfg.tenant}:${dateStr}`,
+      });
+      db.prepare(`UPDATE agent_schedule_configs SET last_triggered_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(cfg.id);
+      logger.info('schedule', '定时触发 daily_briefing', { configId: cfg.id, tenant: cfg.tenant });
+      triggered += 1;
+      continue;
+    }
+
     // 创建 mission
     const result = db.prepare(`
       INSERT INTO agent_missions (tenant, type, title, goal_json, status, created_by, step_count, approval_count, created_at, updated_at)
@@ -124,6 +140,53 @@ registerJobHandler('agent.daily_schedule_tick', async () => {
   }
 
   return { triggered, configsChecked: configs.length };
+});
+
+// ============== 今日战报生成 + 推送（v3.3.a）==============
+
+registerJobHandler('agent.daily_briefing_push', async (payload: Record<string, unknown>) => {
+  const tenant = typeof payload.tenant === 'string' ? payload.tenant : 'default';
+
+  let briefing;
+  try {
+    briefing = await generateBriefing(tenant);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error('briefing', '生成今日战报失败', { tenant, error: msg });
+    return { tenant, error: msg };
+  }
+
+  // 推送给该租户的活跃管理员（有 wechat_work_userid 的）
+  type AdminRow = { wechat_work_userid: string };
+  const admins = db.prepare(
+    `SELECT wechat_work_userid FROM users
+     WHERE tenant = ? AND role IN ('admin', 'tenant_admin')
+       AND wechat_work_userid IS NOT NULL AND is_active = 1`
+  ).all(tenant) as AdminRow[];
+
+  const text = `【今日战报 · ${briefing.date}】\n\n${briefing.narrative}`;
+  let delivered = 0;
+  let stubbed = 0;
+
+  for (const admin of admins) {
+    try {
+      const result = await sendTextMessageToUser({
+        toUser: admin.wechat_work_userid,
+        content: text,
+      });
+      if (result.stub) stubbed += 1;
+      else if (result.success) delivered += 1;
+    } catch (error) {
+      logger.warn('briefing', '推送失败但继续', { tenant, userId: admin.wechat_work_userid, error: String(error) });
+    }
+  }
+
+  markBriefingPushed(tenant, briefing.date);
+  logger.info('briefing', '今日战报推送完成', {
+    tenant, adminCount: admins.length, delivered, stubbed, source: briefing.source,
+  });
+
+  return { tenant, date: briefing.date, delivered, stubbed, adminCount: admins.length, source: briefing.source };
 });
 
 // ============== Agent 数字员工 ==============

@@ -92,6 +92,22 @@ missionsRouter.post('/quick-start', requireRole(['admin', 'tenant_admin']), (req
   const scope = getTenantScope(req);
   const tenant = resolveTenantForWrite(scope);
 
+  // v3.3.a · daily_briefing 特殊路径：不走 agent runtime，直接入 briefing 推送队列
+  if (template.type === 'daily_briefing') {
+    const dateStr = new Date().toISOString().slice(0, 10);
+    enqueueJob({
+      name: 'agent.daily_briefing_push',
+      payload: { tenant },
+      maxAttempts: 2,
+      singletonKey: `briefing-push:${tenant}:${dateStr}:manual`,
+    });
+    return res.status(202).json({
+      success: true,
+      data: { type: template.type, title: template.title, async: true, note: '已加入队列，几秒后 HomePanel 刷新即可看到' },
+      error: null,
+    });
+  }
+
   const result = db.prepare(`
     INSERT INTO agent_missions (tenant, type, title, goal_json, status, created_by, step_count, approval_count, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'queued', ?, 0, 0, datetime('now'), datetime('now'))

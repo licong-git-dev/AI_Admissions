@@ -312,6 +312,19 @@ db.exec(`
     UNIQUE(tenant, mission_type)
   );
 
+  CREATE TABLE IF NOT EXISTS tenant_briefings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    date TEXT NOT NULL,
+    narrative TEXT NOT NULL,
+    stats_json TEXT NOT NULL DEFAULT '{}',
+    persona TEXT NOT NULL DEFAULT 'xiaozhao',
+    source TEXT NOT NULL DEFAULT 'ai',
+    pushed_at TEXT,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tenant, date)
+  );
+
   CREATE TABLE IF NOT EXISTS agent_missions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant TEXT NOT NULL DEFAULT 'default',
@@ -522,6 +535,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_tenant_created ON leads(tenant, created_at);
   CREATE INDEX IF NOT EXISTS idx_content_items_tenant_status ON content_items(tenant, status);
   CREATE INDEX IF NOT EXISTS idx_rpa_tasks_account_status ON rpa_tasks(account_id, status);
+  CREATE INDEX IF NOT EXISTS idx_tenant_briefings_tenant_date ON tenant_briefings(tenant, date);
 `);
 
 const columnExists = (table: string, column: string): boolean => {
@@ -807,10 +821,19 @@ if (config.enableDbSeed && scheduleConfigCount.count === 0) {
     VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'))
   `);
 
-  // 3 条预置定时计划（默认禁用，由用户手动开启）
-  insertSchedule.run('default', 'daily_content_sprint', 8, null);        // 每天 8:30 跑
+  // 4 条预置定时计划（默认禁用，由用户手动开启）
+  insertSchedule.run('default', 'daily_content_sprint', 8, null);        // 每天 8:00 跑
   insertSchedule.run('default', 'lead_followup_sweep', 9, null);         // 每天 9:00 跑
+  insertSchedule.run('default', 'daily_briefing', 19, null);             // 每天 19:00 跑
   insertSchedule.run('default', 'weekly_report', 20, 'mon');             // 每周一 20:00 跑
+}
+
+// 为已有数据库补齐 daily_briefing 默认计划（不覆盖已有配置）
+if (config.enableDbSeed) {
+  db.prepare(`
+    INSERT OR IGNORE INTO agent_schedule_configs (tenant, mission_type, cron_hour, cron_weekday, enabled, created_at, updated_at)
+    VALUES ('default', 'daily_briefing', 19, NULL, 0, datetime('now'), datetime('now'))
+  `).run();
 }
 
 if (config.enableDbSeed && violationWordCount.count === 0) {

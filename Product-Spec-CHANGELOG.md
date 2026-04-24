@@ -1,5 +1,67 @@
 # 变更记录
 
+## [v3.3.a] - 2026-04-24 · AI 员工人格化 + 乙方老板视角
+
+> **业务洞察**：v3.2 把系统压到 5 分钟/天，但乙方老板登录后看到的仍是技术视图（mission 列表、审核队列），视角错位。
+> **本迭代一句话**：给 AI 员工起名字、给老板写第一人称战报、让 Day-1 空数据也有故事讲。
+
+### 新增
+
+- **AI 员工人格化体系**（`server/src/services/agent-personas.ts`）：
+  - 三位数字同事：🎯 **小招**（招生内容官）/ 🕸️ **小线**（线索雷达员）/ 📊 **小报**（经营分析师）
+  - 每位有 `name` / `avatar` / `role` / `tagline` / `tone` / `signature`，可驱动 Gemini prompt 和 UI 渲染
+  - Mission template 新增 `personaId` 字段绑定岗位归属（`daily_content_sprint → xiaozhao` 等）
+  - `getPersonaForMission(type)` 给任意 mission type 返回 persona，未匹配降级到 `xiaozhao`
+
+- **今日战报生成器**（`server/src/services/briefing-generator.ts`）：
+  - `collectTenantStats(tenant)` 聚合 24h 核心指标（12 项：leadsNew / leadsHighIntentNew / contentDrafted / contentApproved / contentPublished / missionsRun / missionsSucceeded / missionsFailed / autoApproved / dealsLast7d / rpaLoggedIn / dmsScanned）
+  - `generateBriefing(tenant)` 用 Gemini 生成小报口吻的第一人称战报，80-200 字 Markdown
+  - Gemini 不可用时自动降级到 `buildTemplate`（基于规则的模板化文案，保证 Day-1 就有故事）
+  - UPSERT 到 `tenant_briefings` 表（tenant + date 唯一），同日只保留一份
+  - 空数据时诚实汇报："今天数据是 0，我明天加把劲"，避免空洞的正向话术
+
+- **新表 `tenant_briefings`**：
+  - `id / tenant / date / narrative / stats_json / persona / source (ai|template) / pushed_at / generated_at`
+  - `UNIQUE(tenant, date)` 保证同日幂等
+  - 加了 `idx_tenant_briefings_tenant_date` 索引
+
+- **新 API 端点**：
+  - `GET /api/dashboard/tenant-briefing/latest` · 返回本租户最新战报 + 完整 persona 元数据
+  - `POST /api/dashboard/tenant-briefing/generate` · 手动触发本租户战报生成
+  - `GET /api/dashboard/agent-personas` · 返回所有 persona 元数据（前端用）
+
+- **每日 19:00 自动推送战报到企微**：
+  - 新 mission template `daily_briefing`（绑定 xiaobao）
+  - `agent_schedule_configs` seed 第 4 条：`daily_briefing · 每日 19:00 · 默认禁用`
+  - 对已有数据库有幂等迁移（`INSERT OR IGNORE`）
+  - Worker 新增 job handler `agent.daily_briefing_push`：调用 `generateBriefing` + 推送到本租户 admin/tenant_admin 的 `wechat_work_userid`
+  - `agent.daily_schedule_tick` 特判 `daily_briefing` 类型：不创建 `agent_missions` 行，直接入推送队列（不消耗 agent runtime 资源）
+
+- **HomePanel 升级**（乙方老板视角）：
+  - 顶部新增「BriefingCard」卡片：带小报头像、岗位徽章、AI/规则生成来源徽章、第一人称叙事正文、12 项关键数字摘要
+  - 无战报时显示「让小报出一份」按钮，点击调用生成接口
+  - QuickActions 的 mission 带 persona 头像前缀（🎯 小招：生成今日 3 条内容）
+  - QuickActions 增加「出一份今日战报」入口（daily_briefing）
+
+- **AgentWorkspace 升级**：
+  - Mission 详情卡片左侧新增 persona 头像圆（10×10，emerald 边框）
+  - 标题右侧新增 persona 徽章（如「小招」）
+  - `MISSION_TYPE_LABELS` 加入 `daily_briefing: '今日战报'`
+
+- **quick-start 路由特判 daily_briefing**：
+  - 不走 agent runtime，直接入 `agent.daily_briefing_push` 队列
+  - 返回 202 Accepted + `async: true`，告知前端几秒后刷新即可
+
+### 修复
+- `agent-tools.ts` 两处 `parameters` 枚举字段缺失 `description` 的 TS 错误（v3.2 遗留）
+
+### 度量目标（v3.3.a）
+- 乙方老板 Day-1 满意度：登录看到 AI 员工有名字 + 即使零数据也有友好汇报 → 首周流失率预期降 30%
+- 续费参考：每日 19:00 的战报推送 → 被动触达率从 0 提升到 100%（有 wechat_work_userid 的租户）
+- 产品情绪价值：mission 列表从"工具"升级为"同事"，差异化对标 Manus / Claude Cowork
+
+---
+
 ## [v3.2] - 2026-04-24 · 准无人值守版
 
 > 目标：把日常运营人力压到 **每天 5 分钟**，逼近"零人干预"但不违反合规底线。
