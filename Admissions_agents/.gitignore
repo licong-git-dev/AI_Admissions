@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# 运行时数据（SQLite 数据库 + WAL/SHM + 备份）
+server/data/
+docker/data/
+*.db
+*.db-shm
+*.db-wal
+backup-*.db
