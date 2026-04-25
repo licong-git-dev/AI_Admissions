@@ -325,6 +325,67 @@ db.exec(`
     UNIQUE(tenant, date)
   );
 
+  CREATE TABLE IF NOT EXISTS monthly_value_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    period TEXT NOT NULL,
+    leads_total INTEGER NOT NULL DEFAULT 0,
+    leads_high_intent INTEGER NOT NULL DEFAULT 0,
+    leads_from_referral INTEGER NOT NULL DEFAULT 0,
+    deals_count INTEGER NOT NULL DEFAULT 0,
+    tuition_total_fen INTEGER NOT NULL DEFAULT 0,
+    commission_total_fen INTEGER NOT NULL DEFAULT 0,
+    commission_paid_fen INTEGER NOT NULL DEFAULT 0,
+    content_published INTEGER NOT NULL DEFAULT 0,
+    content_views INTEGER NOT NULL DEFAULT 0,
+    ai_missions_succeeded INTEGER NOT NULL DEFAULT 0,
+    ai_auto_approved INTEGER NOT NULL DEFAULT 0,
+    saved_minutes INTEGER NOT NULL DEFAULT 0,
+    health_score INTEGER NOT NULL DEFAULT 0,
+    health_grade TEXT NOT NULL DEFAULT 'B',
+    narrative TEXT NOT NULL DEFAULT '',
+    breakdown_json TEXT NOT NULL DEFAULT '{}',
+    pushed_at TEXT,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tenant, period)
+  );
+
+  CREATE TABLE IF NOT EXISTS referral_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    code TEXT NOT NULL UNIQUE,
+    referrer_lead_id INTEGER NOT NULL,
+    referrer_name TEXT NOT NULL,
+    referrer_phone TEXT,
+    invited_count INTEGER NOT NULL DEFAULT 0,
+    converted_count INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (referrer_lead_id) REFERENCES leads (id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS referral_rewards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    referral_code_id INTEGER NOT NULL,
+    referrer_lead_id INTEGER NOT NULL,
+    referee_lead_id INTEGER NOT NULL,
+    deal_id INTEGER,
+    reward_for TEXT NOT NULL DEFAULT 'referrer',
+    amount_fen INTEGER NOT NULL DEFAULT 0,
+    reward_type TEXT NOT NULL DEFAULT 'cash',
+    status TEXT NOT NULL DEFAULT 'pending',
+    paid_at TEXT,
+    paid_by INTEGER,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (referral_code_id) REFERENCES referral_codes (id) ON DELETE RESTRICT,
+    FOREIGN KEY (referrer_lead_id) REFERENCES leads (id) ON DELETE RESTRICT,
+    FOREIGN KEY (referee_lead_id) REFERENCES leads (id) ON DELETE RESTRICT,
+    FOREIGN KEY (deal_id) REFERENCES deals (id) ON DELETE SET NULL,
+    FOREIGN KEY (paid_by) REFERENCES users (id) ON DELETE SET NULL
+  );
+
   CREATE TABLE IF NOT EXISTS agent_missions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant TEXT NOT NULL DEFAULT 'default',
@@ -536,6 +597,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_content_items_tenant_status ON content_items(tenant, status);
   CREATE INDEX IF NOT EXISTS idx_rpa_tasks_account_status ON rpa_tasks(account_id, status);
   CREATE INDEX IF NOT EXISTS idx_tenant_briefings_tenant_date ON tenant_briefings(tenant, date);
+  CREATE INDEX IF NOT EXISTS idx_monthly_value_tenant_period ON monthly_value_statements(tenant, period);
+  CREATE INDEX IF NOT EXISTS idx_referral_codes_tenant ON referral_codes(tenant);
+  CREATE INDEX IF NOT EXISTS idx_referral_codes_referrer ON referral_codes(referrer_lead_id);
+  CREATE INDEX IF NOT EXISTS idx_referral_rewards_tenant_status ON referral_rewards(tenant, status);
+  CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_lead_id);
 `);
 
 const columnExists = (table: string, column: string): boolean => {
@@ -577,6 +643,12 @@ for (const table of TENANT_TABLES) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default'`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant ON ${table}(tenant)`);
   }
+}
+
+// 转介绍：leads 加 referred_by_code（被推荐人携带的推荐码字符串，方便冷数据导入时不强制 FK）
+if (!columnExists('leads', 'referred_by_code')) {
+  db.exec(`ALTER TABLE leads ADD COLUMN referred_by_code TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_referred_by_code ON leads(referred_by_code)`);
 }
 
 const leadCount = db.prepare('SELECT COUNT(*) as count FROM leads').get() as { count: number };

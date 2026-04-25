@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import { db } from '../db';
 import { requireAuth, requireRole, type AuthedRequest } from '../middleware/auth';
 import { notifyAdminNewDeal } from '../services/notify';
+import { triggerRewardOnDeal } from '../services/referral-service';
 
 type DealRow = {
   id: number;
@@ -263,6 +264,13 @@ dealsRouter.post('/', (req: AuthedRequest, res) => {
     suspicious: created.suspicious === 1,
     suspiciousReason: created.suspicious_reason,
   });
+
+  // v3.3.c · 转介绍奖励：成交时自动触发（如该 lead 携带 referred_by_code）
+  try {
+    triggerRewardOnDeal(created.id);
+  } catch (err) {
+    console.warn('[deals] 触发推荐奖励失败但继续', err);
+  }
 
   res.status(201).json({ success: true, data: toDeal(created), error: null });
 });

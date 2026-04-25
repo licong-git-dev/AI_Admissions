@@ -61,6 +61,12 @@ function AssessmentTool() {
     return params.get('formId') || '1';
   }, []);
 
+  const referralCodeParam = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = (params.get('ref') || '').trim().toUpperCase();
+    return /^[0-9A-Z]{4,16}$/.test(raw) ? raw : null;
+  }, []);
+
   const [form, setForm] = useState<FormConfig | null>(null);
   const [step, setStep] = useState<'questions' | 'submit' | 'result'>('questions');
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -72,6 +78,7 @@ function AssessmentTool() {
   const [errorMsg, setErrorMsg] = useState('');
   const [report, setReport] = useState<AssessmentReport | null>(null);
   const [leadId, setLeadId] = useState<number | null>(null);
+  const [referrerInfo, setReferrerInfo] = useState<{ code: string; referrerName: string } | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -84,6 +91,21 @@ function AssessmentTool() {
     };
     void load();
   }, [formIdParam]);
+
+  useEffect(() => {
+    if (!referralCodeParam) return;
+    const lookup = async () => {
+      try {
+        const data = await fetchJson<{ code: string; referrerName: string }>(
+          `/api/referrals/public/by-code/${encodeURIComponent(referralCodeParam)}`
+        );
+        setReferrerInfo(data);
+      } catch {
+        setReferrerInfo(null);
+      }
+    };
+    void lookup();
+  }, [referralCodeParam]);
 
   const currentField = form?.fields[currentIndex];
   const isLastQuestion = form ? currentIndex === form.fields.length - 1 : false;
@@ -121,7 +143,7 @@ function AssessmentTool() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, answers, consentChecked }),
+          body: JSON.stringify({ phone, answers, consentChecked, referralCode: referralCodeParam ?? undefined }),
         }
       );
       setReport(data.report);
@@ -169,6 +191,11 @@ function AssessmentTool() {
           </div>
           <h1 className="mt-3 text-2xl font-bold text-gray-900">{form.name}</h1>
           <p className="mt-1 text-sm text-gray-500">1 分钟找到最适合你的学历提升方案</p>
+          {referrerInfo && (
+            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 text-rose-700 text-xs rounded-full border border-rose-200">
+              🎁 你正被「{referrerInfo.referrerName}」邀请 · 完成首单两人共享奖励
+            </div>
+          )}
         </header>
 
         <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-6">

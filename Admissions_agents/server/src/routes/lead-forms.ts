@@ -4,6 +4,7 @@ import { db } from '../db';
 import { config } from '../config';
 import { loadActiveViolationWords } from './violation-words';
 import { enqueueJob } from '../../worker/job-queue';
+import { bindReferralOnLead } from '../services/referral-service';
 
 type LeadFormRow = {
   id: number;
@@ -176,6 +177,7 @@ leadFormsRouter.post('/:id/submit', async (req, res, next) => {
       phone?: string;
       answers?: Record<string, string>;
       consentChecked?: boolean;
+      referralCode?: string;
     };
 
     if (!body.phone || !PHONE_REGEX.test(body.phone)) {
@@ -239,6 +241,22 @@ leadFormsRouter.post('/:id/submit', async (req, res, next) => {
 
     const { consentId, leadId, submissionId } = transaction();
 
+    // v3.3.c · 转介绍：携带 referralCode 时尝试绑定（失败不影响主流程）
+    let referralBound: { code: string; referrerName: string } | null = null;
+    if (body.referralCode) {
+      try {
+        const trimmed = String(body.referralCode).trim().toUpperCase();
+        if (trimmed.length >= 4) {
+          const result = bindReferralOnLead(leadId, trimmed);
+          if (result.bound && result.codeRecord) {
+            referralBound = { code: result.codeRecord.code, referrerName: result.codeRecord.referrerName };
+          }
+        }
+      } catch (err) {
+        console.warn('[lead-forms] 绑定推荐码失败', err);
+      }
+    }
+
     let report: Record<string, unknown> = {};
     const violationWords = loadActiveViolationWords();
     try {
@@ -277,7 +295,7 @@ leadFormsRouter.post('/:id/submit', async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: { leadId, consentId, submissionId, report },
+      data: { leadId, consentId, submissionId, report, referral: referralBound },
       error: null,
     });
   } catch (error) {

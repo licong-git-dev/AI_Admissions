@@ -50,6 +50,8 @@ const ManagementCenter = lazy(() => import('./components/ManagementCenter'));
 const PlatformConsole = lazy(() => import('./components/PlatformConsole'));
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'));
 const HomePanel = lazy(() => import('./components/HomePanel'));
+const ValueStatementPanel = lazy(() => import('./components/ValueStatementPanel'));
+const ReferralCenter = lazy(() => import('./components/ReferralCenter'));
 
 type LeadPreset = {
   searchText?: string;
@@ -687,6 +689,30 @@ export default function App() {
                 className="h-full"
               >
                 <AgentWorkspace />
+              </motion.div>
+            )}
+
+            {activeTab === 'value-statement' && (
+              <motion.div
+                key="value-statement"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <ValueStatementPanel />
+              </motion.div>
+            )}
+
+            {activeTab === 'referrals' && (
+              <motion.div
+                key="referrals"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <ReferralCenter />
               </motion.div>
             )}
           </AnimatePresence>

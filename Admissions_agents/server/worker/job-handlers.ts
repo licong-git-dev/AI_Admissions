@@ -9,6 +9,12 @@ import { sendTextMessageToUser } from '../src/services/wechat-work';
 import { runAgentMission, resumeAgentMission } from './agent-runtime';
 import { getToolByName, isTerminal } from '../src/services/agent-tools';
 import { generateBriefing, markBriefingPushed } from '../src/services/briefing-generator';
+import {
+  generateValueStatement,
+  listTenantsWithActivity,
+  markStatementPushed,
+  previousMonthPeriod,
+} from '../src/services/value-statement-generator';
 
 // ============== Handlers ==============
 
@@ -187,6 +193,79 @@ registerJobHandler('agent.daily_briefing_push', async (payload: Record<string, u
   });
 
   return { tenant, date: briefing.date, delivered, stubbed, adminCount: admins.length, source: briefing.source };
+});
+
+// ============== v3.3.b 月度价值账单 ==============
+
+registerJobHandler('value_statement.push_one', async (payload: Record<string, unknown>) => {
+  const tenant = typeof payload.tenant === 'string' ? payload.tenant : 'default';
+  const period = typeof payload.period === 'string' ? payload.period : previousMonthPeriod();
+
+  let statement;
+  try {
+    statement = await generateValueStatement(tenant, period);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error('value_statement', '生成月度账单失败', { tenant, period, error: msg });
+    return { tenant, period, error: msg };
+  }
+
+  type AdminRow = { wechat_work_userid: string };
+  const admins = db.prepare(
+    `SELECT wechat_work_userid FROM users
+     WHERE tenant = ? AND role IN ('admin', 'tenant_admin')
+       AND wechat_work_userid IS NOT NULL AND is_active = 1`
+  ).all(tenant) as AdminRow[];
+
+  const tuitionYuan = Math.round(statement.tuitionTotalFen / 100);
+  const commissionYuan = Math.round(statement.commissionTotalFen / 100);
+  const text = `【月度价值账单 · ${period}】\n续费健康分：${statement.healthScore} / 100（${statement.healthGrade} 级）\n本月营收 ${tuitionYuan} 元，平台分成 ${commissionYuan} 元\n\n${statement.narrative}`;
+
+  let delivered = 0;
+  let stubbed = 0;
+  for (const admin of admins) {
+    try {
+      const result = await sendTextMessageToUser({ toUser: admin.wechat_work_userid, content: text });
+      if (result.stub) stubbed += 1;
+      else if (result.success) delivered += 1;
+    } catch (error) {
+      logger.warn('value_statement', '推送失败但继续', { tenant, userId: admin.wechat_work_userid, error: String(error) });
+    }
+  }
+
+  markStatementPushed(tenant, period);
+  logger.info('value_statement', '月度账单推送完成', {
+    tenant, period, adminCount: admins.length, delivered, stubbed, healthScore: statement.healthScore,
+  });
+
+  return { tenant, period, delivered, stubbed, healthScore: statement.healthScore };
+});
+
+// 月初 1 号 09:00 触发：为每个活跃租户生成 + 推送上月账单
+registerJobHandler('value_statement.monthly_tick', async () => {
+  const now = new Date();
+  const isFirstOfMonth = now.getDate() === 1;
+  const isNineAM = now.getHours() === 9;
+  if (!isFirstOfMonth || !isNineAM) {
+    return { skipped: true, reason: 'not first day at 9am', date: now.getDate(), hour: now.getHours() };
+  }
+
+  const period = previousMonthPeriod(now);
+  const tenants = listTenantsWithActivity();
+  const enqueued: string[] = [];
+
+  for (const tenant of tenants) {
+    enqueueJob({
+      name: 'value_statement.push_one',
+      payload: { tenant, period },
+      maxAttempts: 2,
+      singletonKey: `value-statement:${tenant}:${period}`,
+    });
+    enqueued.push(tenant);
+  }
+
+  logger.info('value_statement', '月度账单 tick 入队', { period, tenants: enqueued.length });
+  return { period, enqueued: enqueued.length };
 });
 
 // ============== Agent 数字员工 ==============
@@ -398,6 +477,7 @@ const RECURRING_JOBS: RecurringJob[] = [
   { name: 'audit.cleanup', intervalMs: 24 * 60 * 60 * 1000, payload: { retainDays: 60 } },
   { name: 'jobs.cleanup', intervalMs: 24 * 60 * 60 * 1000, payload: { retainDays: 7 } },
   { name: 'agent.daily_schedule_tick', intervalMs: 5 * 60 * 1000, maxAttempts: 1 },
+  { name: 'value_statement.monthly_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
 ];
 
 const lastEnqueuedAt = new Map<string, number>();

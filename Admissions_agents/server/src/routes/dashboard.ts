@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db';
 import type { AuthedRequest } from '../middleware/auth';
 import { generateBriefing, getLatestBriefing } from '../services/briefing-generator';
+import { generateValueStatement, getLatestValueStatement, listValueStatements, previousMonthPeriod } from '../services/value-statement-generator';
 import { AGENT_PERSONAS } from '../services/agent-personas';
 
 const dashboardRouter = Router();
@@ -428,6 +429,49 @@ dashboardRouter.post('/tenant-briefing/generate', async (req, res) => {
 // v3.3.a · 暴露 agent personas（前端渲染头像 + 昵称）
 dashboardRouter.get('/agent-personas', (_req, res) => {
   res.json({ success: true, data: AGENT_PERSONAS, error: null });
+});
+
+// v3.3.b · 月度价值账单
+dashboardRouter.get('/value-statement/latest', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+  const statement = getLatestValueStatement(tenant);
+  res.json({ success: true, data: statement, error: null });
+});
+
+dashboardRouter.get('/value-statement/list', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+  const limit = Math.min(36, Math.max(1, Number((req.query.limit as string | undefined) ?? 12)));
+  const list = listValueStatements(tenant, limit);
+  res.json({ success: true, data: list, error: null });
+});
+
+dashboardRouter.post('/value-statement/generate', async (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+  const period = typeof (req.body as { period?: string } | undefined)?.period === 'string'
+    ? (req.body as { period: string }).period
+    : previousMonthPeriod();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
+    return res.status(400).json({ success: false, data: null, error: 'period 格式错误（应为 YYYY-MM）' });
+  }
+  try {
+    const statement = await generateValueStatement(tenant, period);
+    res.json({ success: true, data: statement, error: null });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, data: null, error: msg });
+  }
 });
 
 export { dashboardRouter };

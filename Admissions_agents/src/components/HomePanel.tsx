@@ -107,11 +107,29 @@ const MISSION_PERSONA_AVATAR: Record<string, { avatar: string; name: string }> =
   daily_briefing: { avatar: '📊', name: '小报' },
 };
 
+type ValueTeaser = {
+  period: string;
+  tuitionTotalFen: number;
+  commissionTotalFen: number;
+  healthScore: number;
+  healthGrade: 'S' | 'A' | 'B' | 'C' | 'D';
+  leadsFromReferral: number;
+};
+
+const HEALTH_GRADE_COLOR: Record<string, string> = {
+  S: 'bg-purple-100 text-purple-700',
+  A: 'bg-emerald-100 text-emerald-700',
+  B: 'bg-blue-100 text-blue-700',
+  C: 'bg-amber-100 text-amber-700',
+  D: 'bg-red-100 text-red-700',
+};
+
 function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const user = getUser();
   const [home, setHome] = useState<HomeData | null>(null);
   const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [valueTeaser, setValueTeaser] = useState<ValueTeaser | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [launching, setLaunching] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -141,9 +159,18 @@ function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
         // ignore
       }
     };
+    const loadValueTeaser = async () => {
+      try {
+        const data = await authJson<ValueTeaser | null>('/api/dashboard/value-statement/latest');
+        setValueTeaser(data);
+      } catch {
+        // ignore
+      }
+    };
     void load();
     void loadOnboarding();
     void loadBriefing();
+    void loadValueTeaser();
   }, []);
 
   const generateBriefing = async () => {
@@ -211,6 +238,33 @@ function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
           loading={briefingLoading}
           onGenerate={generateBriefing}
         />
+      )}
+
+      {/* 上月价值账单速览（仅乙方管理员 · v3.3.b）*/}
+      {home.role === 'tenant_admin' && valueTeaser && (
+        <button
+          onClick={() => onNavigate('value-statement')}
+          className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-xl hover:shadow-sm transition-shadow text-left"
+        >
+          <div className="flex-1">
+            <div className="text-xs uppercase tracking-wide text-emerald-700 font-semibold">
+              {valueTeaser.period} 月度价值账单
+            </div>
+            <div className="text-lg font-semibold text-gray-900 mt-0.5">
+              营收 ¥{(valueTeaser.tuitionTotalFen / 100).toLocaleString('zh-CN')} · 应付分成 ¥{(valueTeaser.commissionTotalFen / 100).toLocaleString('zh-CN')}
+            </div>
+            <div className="text-xs text-gray-600 mt-0.5">
+              ROI {(valueTeaser.tuitionTotalFen / Math.max(valueTeaser.commissionTotalFen, 1)).toFixed(1)}x
+              {valueTeaser.leadsFromReferral > 0 && <span className="ml-2">· 转介绍贡献 {valueTeaser.leadsFromReferral} 条</span>}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className={cn('inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-bold', HEALTH_GRADE_COLOR[valueTeaser.healthGrade] ?? 'bg-gray-100 text-gray-700')}>
+              {valueTeaser.healthScore} · {valueTeaser.healthGrade}
+            </div>
+            <div className="text-[10px] text-gray-500 mt-1">续费健康分</div>
+          </div>
+        </button>
       )}
 
       {/* 新手引导（仅乙方管理员未完成时显示） */}

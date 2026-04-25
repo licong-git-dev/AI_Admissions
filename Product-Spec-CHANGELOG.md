@@ -1,5 +1,109 @@
 # 变更记录
 
+## [v3.3.c] - 2026-04-25 · 学员转介绍裂变（教育行业最大杠杆）
+
+> **业务洞察**：教育行业获客最贵，但已成交学员推荐朋友的成本接近 0、转化率往往是冷流量的 5-10 倍。系统过去对推荐链路一无所知。
+> **本迭代一句话**：让一个学员的成交，自动触发裂变机会。
+
+### 新增
+
+- **推荐码体系**（`server/src/services/referral-service.ts`）：
+  - 8 位大写字母数字（去除 0/O/1/I 等易混淆字符），冲突重试 5 次
+  - 仅 enrolled 学员可签发；同一 lead 永远复用同一推荐码（`issueOrGetReferralCode`）
+  - `bindReferralOnLead` 在新 lead 创建时绑定 `referred_by_code`，含自荐保护
+  - `triggerRewardOnDeal` 在成交时自动写入两条 reward 记录（推荐人 ¥200 + 被推荐人 ¥100，金额由 env 可调）
+- **三层路由**（`server/src/routes/referrals.ts`）：
+  - 公开 `GET /api/referrals/public/by-code/:code` — H5 测评页面解码推荐人姓名
+  - 学员 `GET /api/student/referrals/me` — 取自己的推荐码 + 邀请/转化/已得奖励
+  - 后台 `GET /api/referrals/{stats,rewards,codes}` + `POST /rewards/:id/mark-paid` — 转介绍管理页
+- **AssessmentTool 链路**（`src/components/AssessmentTool.tsx`）：
+  - URL 参数 `?ref=CODE` 自动校验 + 解码出推荐人姓名
+  - 顶部展示「你正被 XXX 邀请」鼓励横幅
+  - 提交时附带 `referralCode` 字段
+- **学员端「我的推荐码」**（`StudentPortalEntry` 新增 `ReferralWidget`）：
+  - enrolled 学员看大字推荐码 + 一键复制邀请文案 + 邀请/转化/累计奖励三宫格
+  - 未到 enrolled 时显示「待解锁」预告卡片
+- **后台「转介绍」页面**（`src/components/ReferralCenter.tsx`）：
+  - 6 大顶部指标 + 奖励流水/推荐码列表两个 tab
+  - 奖励状态过滤（全部/待发放/已发放）+ 一键「标记已发」
+  - 推荐码列表按转化数排序（看哪些学员"出货"最多）
+- **deals 创建时自动钩子**：成交记录创建后调用 `triggerRewardOnDeal(dealId)`，失败不阻塞主流程
+- **价值账单联动**：v3.3.b 的「上月价值账单」会单独标出「转介绍贡献 X 条线索（0 成本获客）」
+
+### 数据库
+
+新增三个表：
+
+- `referral_codes`：tenant + code（唯一）+ referrer_lead_id + invited_count + converted_count
+- `referral_rewards`：tenant + code_id + referrer/referee_lead_id + deal_id + reward_for + amount_fen + status (pending/paid/voided)
+- `leads.referred_by_code`：被推荐人携带的码字符串（不强制 FK，允许冷数据导入）
+
+### 开关与配置
+
+- `REFERRAL_REFERRER_REWARD_FEN`：推荐人单笔奖励，默认 20000（¥200）
+- `REFERRAL_REFEREE_REWARD_FEN`：被推荐人单笔奖励，默认 10000（¥100）
+
+### 度量目标
+
+- 上线 60 天后：转介绍线索数占新增线索 ≥ 15%
+- 转介绍线索 → 成交转化率 ≥ 普通线索的 1.5 倍
+- 已签发推荐码的成交学员占比 ≥ 70%（ReferralWidget 触达率）
+
+---
+
+## [v3.3.b] - 2026-04-25 · 月度价值账单（续费率防御工事）
+
+> **业务洞察**：30% 分成是契约数字，但乙方每月看不到「我付了 X，平台给我创造了 Y」的对账。SaaS 续费率第一杀手是「价值不可见」。
+> **本迭代一句话**：每月 1 号，系统自动给老板交一份「ROI 账单 + 续费健康分」。
+
+### 新增
+
+- **价值账单生成器**（`server/src/services/value-statement-generator.ts`）：
+  - 聚合上月 12 项指标（线索 / 高意向 / 转介绍 / 成交 / 学费 / 分成应付已付 / 内容 / AI 任务 / 自动审批 / 节省人力 / 活跃天数）
+  - 计算续费健康分（4 个加权维度，0-100）：
+    - **增长 30%**（环比线索增长率）
+    - **转化 25%**（线索→成交转化率，10% 即满分）
+    - **AI 投入 20%**（mission 数量密度，封顶 100）
+    - **活跃 25%**（本月有写入操作的天数）
+  - 评级 S/A/B/C/D 分别有差异化的鼓励/警示话术
+  - Gemini 可用走 AI 叙事（强调 ROI / 给"内容阅读"穿场景），不可用走规则模板兜底
+  - UPSERT 同月幂等，可重算
+- **三个 API**（`server/src/routes/dashboard.ts`）：
+  - `GET /value-statement/latest` 取最新一月
+  - `GET /value-statement/list?limit=12` 取最近 12 个月历史
+  - `POST /value-statement/generate { period? }` 手动重算（默认上月）
+- **月初自动推送**（`server/worker/job-handlers.ts`）：
+  - 新增 recurring job `value_statement.monthly_tick`（每小时检查一次，命中 1 号 09:00 才入队）
+  - 命中后为每个活跃租户入队 `value_statement.push_one` 单租户作业
+  - 推送到该租户 admin/tenant_admin 的企微 userid，文本包含健康分 + 营收/分成 + 完整叙事
+- **HomePanel 速览卡片**（`src/components/HomePanel.tsx`）：
+  - 仅 tenant_admin 显示，从 BriefingCard 下方
+  - 一行：「2026-03 · 营收 ¥XX · 应付分成 ¥YY · ROI N.Nx · 健康分 80 / A」
+  - 整卡可点击 → 跳转 value-statement 详情页
+- **价值账单详情页**（`src/components/ValueStatementPanel.tsx`）：
+  - 顶部主卡片：渐变背景 + 健康分大徽章 + Gemini 叙事正文
+  - 12 项数据指标卡（含环比箭头 + "0 成本"等小徽章）
+  - 健康分四维度构成进度条
+  - 历史账单列表（最多 12 个月，可点击切换查看任一月）
+  - 一键「重算上月账单」按钮
+- **新增 NAV**：`价值账单`（Receipt 图标）
+
+### 数据库
+
+新增 `monthly_value_statements` 表：tenant + period（YYYY-MM 唯一）+ 18 个聚合字段 + breakdown_json + narrative + pushed_at。
+
+### 开关与配置
+
+无新 env。复用 v3.0 的 `GEMINI_API_KEY`、v3.2 的 wechat-work 配置。
+
+### 度量目标
+
+- 月度账单送达率 ≥ 95%（成功推送企微的租户占活跃租户）
+- 续费健康分 ≥ B 级的租户续费率 ≥ 90%
+- 三个月内：80% 的租户至少打开过一次价值账单详情页（衡量"价值可见"是否真的传到位）
+
+---
+
 ## [v3.3.a] - 2026-04-24 · AI 员工人格化 + 乙方老板视角
 
 > **业务洞察**：v3.2 把系统压到 5 分钟/天，但乙方老板登录后看到的仍是技术视图（mission 列表、审核队列），视角错位。

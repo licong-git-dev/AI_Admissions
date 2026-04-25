@@ -17,6 +17,8 @@ import {
   Briefcase,
   Globe,
   Bot,
+  Receipt,
+  Gift,
 } from 'lucide-react';
 
 export const NAV_ITEMS = [
@@ -31,6 +33,8 @@ export const NAV_ITEMS = [
   { id: 'schedule', label: '排课管理', icon: Calendar },
   { id: 'compliance', label: '合规中心', icon: ShieldCheck },
   { id: 'management', label: '经营管理', icon: Briefcase },
+  { id: 'value-statement', label: '价值账单', icon: Receipt },
+  { id: 'referrals', label: '转介绍', icon: Gift },
   { id: 'platform', label: '平台总控台', icon: Globe },
   { id: 'settings', label: '系统设置', icon: Settings },
   { id: 'portal', label: '学员自助端', icon: Smartphone },

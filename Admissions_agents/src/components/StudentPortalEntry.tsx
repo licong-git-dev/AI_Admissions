@@ -408,6 +408,8 @@ function PortalDashboard({ profile, onLogout }: { profile: StudentProfile | null
           </Card>
         )}
 
+        <ReferralWidget />
+
         <div className="pt-6 text-center text-xs text-gray-400 space-y-1">
           <div>遇到问题请联系招生顾问</div>
           <div>
@@ -417,6 +419,106 @@ function PortalDashboard({ profile, onLogout }: { profile: StudentProfile | null
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+type MyReferral = {
+  eligible: boolean;
+  reason?: string;
+  currentStatus?: string;
+  nickname?: string;
+  code?: string;
+  invitedCount?: number;
+  convertedCount?: number;
+  totalEarnedFen?: number;
+  totalPendingFen?: number;
+};
+
+function ReferralWidget() {
+  const [data, setData] = useState<MyReferral | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const result = await studentJson<MyReferral>('/api/student/referrals/me');
+        setData(result);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '加载失败');
+      }
+    };
+    void load();
+  }, []);
+
+  if (error || !data) return null;
+
+  if (!data.eligible) {
+    if (data.reason === 'not_enrolled') {
+      return (
+        <div className="bg-rose-50 border border-rose-100 rounded-xl p-4">
+          <div className="text-sm text-rose-700 font-medium">🎁 推荐有奖（待解锁）</div>
+          <div className="text-xs text-rose-600 mt-1">
+            完成报名后，可拿到专属推荐码 — 朋友通过你成交，你拿 ¥200，朋友拿 ¥100。
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  const shareUrl = `${window.location.origin}/assessment?formId=1&ref=${data.code}`;
+
+  const copyShare = async () => {
+    try {
+      await navigator.clipboard.writeText(`我在用 AI 招生助手做学历提升测评，输入我的推荐码 ${data.code} 报名首单，咱俩都能领奖励。\n${shareUrl}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('复制失败，请手动选择文字');
+    }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-rose-50 via-white to-emerald-50 border border-rose-200 rounded-xl p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-rose-700">🎁 我的推荐码</div>
+        <div className="text-[10px] text-gray-500">推荐人 ¥200 · 被推荐人 ¥100</div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between">
+        <div className="font-mono text-2xl font-bold text-gray-900 tracking-widest">{data.code}</div>
+        <button
+          onClick={copyShare}
+          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded"
+        >
+          {copied ? '已复制' : '复制邀请文案'}
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <Mini label="已邀请" value={data.invitedCount ?? 0} />
+        <Mini label="已转化" value={data.convertedCount ?? 0} accent="text-emerald-600" />
+        <Mini label="累计奖励" value={`¥${((data.totalEarnedFen ?? 0) / 100).toFixed(0)}`} accent="text-rose-600" />
+      </div>
+
+      {(data.totalPendingFen ?? 0) > 0 && (
+        <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          有 ¥{((data.totalPendingFen ?? 0) / 100).toFixed(0)} 待发放，正在处理中
+        </div>
+      )}
+
+      <div className="mt-3 text-[10px] text-gray-500 break-all">{shareUrl}</div>
+    </div>
+  );
+}
+
+function Mini({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
+  return (
+    <div className="p-2 bg-white rounded border border-gray-100">
+      <div className="text-[10px] text-gray-500">{label}</div>
+      <div className={cn('text-lg font-semibold', accent ?? 'text-gray-900')}>{value}</div>
     </div>
   );
 }
