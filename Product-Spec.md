@@ -1,6 +1,6 @@
 # 招生智能体集群 - Product Spec
 
-> **当前版本：v3.3.c（2026-04-25）· 月度价值账单 + 学员转介绍裂变**
+> **当前版本：v3.4（2026-04-25）· 一线战斗力 + 续费保卫战 + 智能自愈**
 > 完整迭代历史见 [Product-Spec-CHANGELOG.md](./Product-Spec-CHANGELOG.md)
 > 未来演进路径见 [Product-Spec-V3-Roadmap.md](./Product-Spec-V3-Roadmap.md)
 > 运维手册见 [Execute_Plan/Operator-Runbook.md](./Execute_Plan/Operator-Runbook.md)
@@ -13,6 +13,11 @@
 ---
 
 ## v2.2 状态快照
+
+v3.4 新增（2026-04-25 · 一线战斗力 + 续费保卫战 + 智能自愈）：
+- ✅ **专员业绩仪表盘**：实时成交 + 提成估算（默认 8%）+ 团队排行榜（🥇🥈🥉 冠亚季）+ HomePanel teaser
+- ✅ **续费临界自动干预**：每月 15 号扫健康分 < 55 的租户，「小报」自动推送分项诊断 + 3 条改进建议
+- ✅ **智能重试**：错误分类器（transient/permanent），mission 临时性失败自动退避重试，永久性立即失败不浪费预算
 
 v3.3.c 新增（2026-04-25 · 学员转介绍裂变）：
 - ✅ **推荐码体系**：8 位推荐码 + 自动生成 + 自荐保护 + UPSERT 幂等

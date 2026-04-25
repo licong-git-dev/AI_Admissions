@@ -124,12 +124,27 @@ const HEALTH_GRADE_COLOR: Record<string, string> = {
   D: 'bg-red-100 text-red-700',
 };
 
+type PerformanceTeaser = {
+  me: {
+    name: string;
+    rank: number;
+    monthDealsCount: number;
+    monthCommissionFen: number;
+    trendPct: number;
+    weekCommissionFen: number;
+    weekDealsCount: number;
+    leadsHighIntent: number;
+  } | null;
+  ranking: Array<{ rank: number }>;
+};
+
 function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const user = getUser();
   const [home, setHome] = useState<HomeData | null>(null);
   const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [valueTeaser, setValueTeaser] = useState<ValueTeaser | null>(null);
+  const [perfTeaser, setPerfTeaser] = useState<PerformanceTeaser | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [launching, setLaunching] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -167,10 +182,19 @@ function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
         // ignore
       }
     };
+    const loadPerfTeaser = async () => {
+      try {
+        const data = await authJson<PerformanceTeaser>('/api/dashboard/specialist-performance');
+        setPerfTeaser(data);
+      } catch {
+        // ignore
+      }
+    };
     void load();
     void loadOnboarding();
     void loadBriefing();
     void loadValueTeaser();
+    void loadPerfTeaser();
   }, []);
 
   const generateBriefing = async () => {
@@ -416,6 +440,37 @@ function HomePanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* 专员业绩速览（v3.4.a） */}
+      {home.role === 'specialist' && perfTeaser?.me && (
+        <button
+          onClick={() => onNavigate('performance')}
+          className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-amber-50 via-white to-emerald-50 border border-amber-200 rounded-xl hover:shadow-sm transition-shadow text-left"
+        >
+          <div className="flex-1">
+            <div className="text-xs uppercase tracking-wide text-amber-700 font-semibold">
+              本月业绩 · {perfTeaser.me.name}
+            </div>
+            <div className="text-xl font-semibold text-gray-900 mt-0.5">
+              预估提成 ¥{(perfTeaser.me.monthCommissionFen / 100).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+              <span className="ml-2 text-sm text-gray-500 font-normal">· {perfTeaser.me.monthDealsCount} 单</span>
+            </div>
+            <div className="text-xs text-gray-600 mt-0.5">
+              本周 ¥{(perfTeaser.me.weekCommissionFen / 100).toLocaleString('zh-CN')} · {perfTeaser.me.weekDealsCount} 单
+              <span className={cn('ml-2', perfTeaser.me.trendPct >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                {perfTeaser.me.trendPct >= 0 ? '+' : ''}{perfTeaser.me.trendPct}% 环比
+              </span>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="inline-flex items-baseline gap-1 px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800">
+              <span className="text-2xl font-bold">#{perfTeaser.me.rank}</span>
+              <span className="text-xs">/ {perfTeaser.ranking.length}</span>
+            </div>
+            <div className="text-[10px] text-gray-500 mt-1">本月排名</div>
+          </div>
+        </button>
       )}
 
       {/* 专员今日待办 */}

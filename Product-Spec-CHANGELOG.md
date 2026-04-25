@@ -1,5 +1,57 @@
 # 变更记录
 
+## [v3.4] - 2026-04-25 · 一线战斗力 + 续费保卫战 + 智能自愈
+
+> **业务洞察**：v3.3 把甲方/乙方/学员视角都做厚了，但「专员」这个一线角色还是只有一个孤零零的待办列表。同时 v3.3.b 的健康分只是"显示"，没有"行动"。
+> **本迭代一句话**：让系统从「显示数据」升级到「基于数据采取行动」。
+
+### v3.4.a · 专员业绩仪表盘（一线战斗力）
+
+- **后端 API**（`server/src/routes/dashboard.ts`）：`GET /api/dashboard/specialist-performance`
+  - 拉本租户全部 specialist + tenant_admin 的业绩
+  - 8 个维度：本月成交单数 / 学费总额 / 预估提成（默认 8%）/ 上月对比 / 环比 % / 本周成绩 / 高意向数 / 转化率
+  - 提成率可配（`SPECIALIST_COMMISSION_RATE` 环境变量，0-1 之间，默认 0.08）
+- **前端页面**（`src/components/SpecialistPerformance.tsx`）：
+  - 顶部「我的本月」+「本月排名 #N」双卡，含 🥇🥈🥉 冠军 / 亚军 / 季军徽章
+  - 团队总计 + 完整排行榜（按学费降序，本人行高亮 emerald）
+  - 环比 % 红绿色变（增长 → emerald，下滑 → red）
+- **HomePanel 升级**：specialist 角色登录后，顶部新增「本月预估提成 + 排名」teaser 卡片，可点跳转完整业绩榜
+- **新增 NAV**：`业绩榜`（Trophy 图标）
+
+### v3.4.b · 续费临界自动干预（续费保卫战）
+
+- **新增定时 job**（`server/worker/job-handlers.ts`）：
+  - `renewal.health_check_tick`：每月 15 号 09:00 触发（每小时 tick 检查日期+小时）
+  - 扫每个租户最新 `monthly_value_statements`，`health_score < 55` 即入队 `renewal.push_intervention`
+  - 阈值由常量 `RENEWAL_HEALTH_THRESHOLD = 55` 控制
+- **干预内容**（`renewal.push_intervention`）：
+  - 用「📊 小报」persona 第一人称写客户成功提醒
+  - 根据 healthBreakdown 分项分诊：AI 调用低 / 转化率低 / 活跃天数低 / 线索环比下滑 → 各对应一条具体建议
+  - 推送到该租户 admin/tenant_admin 的企微 userid
+- **闭环逻辑**：v3.3.b 月初 1 号生成账单 → v3.4.b 月中 15 号若健康分 < 55 主动干预，给老板 2 周时间挽救
+
+### v3.4.c · 智能重试（mission 自愈）
+
+- **错误分类器**（`server/worker/error-classifier.ts`）：
+  - `transient`：429 / rate limit / quota / 超时 / 网络抖动 / 5xx → 退避重试
+  - `permanent`：4xx / 不存在 / 非法 / 未配置 / 未知 tool → 立即标失败，不浪费重试预算
+  - 偏保守：未匹配模式默认 transient（错判 transient 多重试一次，错判 permanent 会让真实可恢复错误失败）
+- **job-queue 联动**（`server/worker/job-queue.ts`）：
+  - `markFailed` 调 `classifyError`，permanent 直接 `status='failed'` 即使还有 attempts 余量
+  - 日志多打 `category` 字段，便于排查
+- **agent.run_mission 改造**：
+  - 之前 catch 后吞掉错误返回 success → 现在 transient 抛出让 job-queue 退避重试，permanent 标 failed 返回
+  - `maxAttempts` 全部从 1 → 3（quick-start / mission 创建 / 定时调度三处）
+- **效果**：Gemini 限流、网络抖动这种偶发故障从「mission failed 老板手动重启」变成「系统自动退避重试 → 多数 5 分钟内自愈」
+
+### 度量目标
+
+- **v3.4.a**：60 天后专员人均 mission 触发数 ≥ 上月 1.5 倍（业绩榜激发竞争）
+- **v3.4.b**：触发干预的租户中 ≥ 30% 在下个月健康分提升 ≥ 1 个等级
+- **v3.4.c**：mission 失败率（永久失败 / 总执行）≤ 2%，原始失败的 ≥ 70% 通过自动重试自愈
+
+---
+
 ## [v3.3.c] - 2026-04-25 · 学员转介绍裂变（教育行业最大杠杆）
 
 > **业务洞察**：教育行业获客最贵，但已成交学员推荐朋友的成本接近 0、转化率往往是冷流量的 5-10 倍。系统过去对推荐链路一无所知。

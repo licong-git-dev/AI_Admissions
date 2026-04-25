@@ -136,7 +136,7 @@ registerJobHandler('agent.daily_schedule_tick', async () => {
     enqueueJob({
       name: 'agent.run_mission',
       payload: { missionId },
-      maxAttempts: 1,
+      maxAttempts: 3, // v3.4.c · 智能重试：transient 错误退避重试，permanent 立即失败
       singletonKey: `mission:${missionId}`,
     });
 
@@ -268,9 +268,134 @@ registerJobHandler('value_statement.monthly_tick', async () => {
   return { period, enqueued: enqueued.length };
 });
 
+// ============== v3.4.b 续费临界自动干预 ==============
+
+const RENEWAL_HEALTH_THRESHOLD = 55; // 健康分 < 55 即触发干预
+
+registerJobHandler('renewal.push_intervention', async (payload: Record<string, unknown>) => {
+  const tenant = typeof payload.tenant === 'string' ? payload.tenant : 'default';
+  const period = typeof payload.period === 'string' ? payload.period : previousMonthPeriod();
+
+  // 拉最新账单获取健康分细节
+  type StatementRow = {
+    health_score: number;
+    health_grade: string;
+    leads_total: number;
+    deals_count: number;
+    ai_missions_succeeded: number;
+    breakdown_json: string;
+  };
+  const stmt = db.prepare(
+    `SELECT health_score, health_grade, leads_total, deals_count, ai_missions_succeeded, breakdown_json
+     FROM monthly_value_statements WHERE tenant = ? AND period = ?`
+  ).get(tenant, period) as StatementRow | undefined;
+
+  if (!stmt) {
+    return { tenant, period, skipped: 'no_statement' };
+  }
+  if (stmt.health_score >= RENEWAL_HEALTH_THRESHOLD) {
+    return { tenant, period, skipped: 'healthy', score: stmt.health_score };
+  }
+
+  // 找到该租户的 admin 用户（有企微 userid 的）
+  type AdminRow = { wechat_work_userid: string };
+  const admins = db.prepare(
+    `SELECT wechat_work_userid FROM users
+     WHERE tenant = ? AND role IN ('admin', 'tenant_admin')
+       AND wechat_work_userid IS NOT NULL AND is_active = 1`
+  ).all(tenant) as AdminRow[];
+
+  // 根据健康分细分诊断 + 给具体 3 条建议
+  const breakdown = JSON.parse(stmt.breakdown_json) as {
+    healthBreakdown?: { leadGrowthRate: number; conversionRate: number; aiEngagementScore: number; activeDaysScore: number };
+  };
+  const hb = breakdown.healthBreakdown ?? { leadGrowthRate: 0, conversionRate: 0, aiEngagementScore: 0, activeDaysScore: 0 };
+  const advice: string[] = [];
+  if (hb.aiEngagementScore < 40) {
+    advice.push('① AI 员工调用太少，建议把每日内容冲刺定时任务打开（AI 员工 → 定时自动化）');
+  }
+  if (hb.conversionRate < 3) {
+    advice.push('② 线索→成交转化率偏低，建议让 AI 扫一遍高意向线索 → 给专员推话术');
+  }
+  if (hb.activeDaysScore < 15) {
+    advice.push('③ 本月活跃天数太少，建议至少每天登录一次审核 AI 内容（5 分钟）');
+  }
+  if (hb.leadGrowthRate < -20) {
+    advice.push('④ 线索环比下滑严重，建议查一下 RPA 账号是否被封或 H5 测评是否在投放');
+  }
+  if (advice.length === 0) {
+    advice.push('① 各项指标都偏低，建议先把每日内容冲刺 + 高意向跟进两个定时任务打开');
+  }
+
+  const text = [
+    `【客户成功提醒 · ${period}】`,
+    `老板，我是小报。我看了下你这月的续费健康分：${stmt.health_score} / 100（${stmt.health_grade} 级）。`,
+    `按这个状态再不动手，下个续费周期可能就要重新评估合作了。`,
+    ``,
+    `我帮你拆了下，三个关键改进点：`,
+    ...advice.slice(0, 3),
+    ``,
+    `要不抽 5 分钟登录系统看看？我等你。`,
+  ].join('\n');
+
+  let delivered = 0;
+  let stubbed = 0;
+  for (const admin of admins) {
+    try {
+      const result = await sendTextMessageToUser({ toUser: admin.wechat_work_userid, content: text });
+      if (result.stub) stubbed += 1;
+      else if (result.success) delivered += 1;
+    } catch (error) {
+      logger.warn('renewal', '推送失败但继续', { tenant, userId: admin.wechat_work_userid, error: String(error) });
+    }
+  }
+
+  logger.info('renewal', '续费干预推送完成', {
+    tenant, period, score: stmt.health_score, grade: stmt.health_grade, delivered, stubbed, adminCount: admins.length,
+  });
+  return { tenant, period, score: stmt.health_score, delivered, stubbed };
+});
+
+// 月中 15 号 09:00 触发：扫所有租户的最新账单，对 health_score < 阈值的入队推送
+registerJobHandler('renewal.health_check_tick', async () => {
+  const now = new Date();
+  const isFifteenth = now.getDate() === 15;
+  const isNineAM = now.getHours() === 9;
+  if (!isFifteenth || !isNineAM) {
+    return { skipped: true, reason: 'not 15th at 9am', date: now.getDate(), hour: now.getHours() };
+  }
+
+  // 拿每个租户最新一份账单
+  type LatestRow = { tenant: string; period: string; health_score: number };
+  const latest = db.prepare(`
+    SELECT m.tenant, m.period, m.health_score
+    FROM monthly_value_statements m
+    INNER JOIN (
+      SELECT tenant, MAX(period) as max_period
+      FROM monthly_value_statements
+      GROUP BY tenant
+    ) latest_p ON latest_p.tenant = m.tenant AND latest_p.max_period = m.period
+  `).all() as LatestRow[];
+
+  let triggered = 0;
+  for (const row of latest) {
+    if (row.health_score >= RENEWAL_HEALTH_THRESHOLD) continue;
+    enqueueJob({
+      name: 'renewal.push_intervention',
+      payload: { tenant: row.tenant, period: row.period },
+      maxAttempts: 2,
+      singletonKey: `renewal-intervention:${row.tenant}:${row.period}`,
+    });
+    triggered += 1;
+  }
+
+  logger.info('renewal', '续费健康巡检完成', { tenantsChecked: latest.length, triggered });
+  return { tenantsChecked: latest.length, triggered };
+});
+
 // ============== Agent 数字员工 ==============
 
-registerJobHandler('agent.run_mission', async (payload: Record<string, unknown>) => {
+registerJobHandler('agent.run_mission', async (payload: Record<string, unknown>, ctx: { jobId: number; attempt: number }) => {
   const missionId = typeof payload.missionId === 'number' ? payload.missionId : null;
   if (!missionId) return { error: 'missionId 缺失' };
   try {
@@ -278,9 +403,22 @@ registerJobHandler('agent.run_mission', async (payload: Record<string, unknown>)
     return { missionId, done: true };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.error('agent', 'run_mission 异常', { missionId, error: msg });
+    // v3.4.c · 智能重试：transient 错误抛出让 job-queue 退避重试，permanent 立即标失败
+    const { classifyError } = await import('./error-classifier');
+    const category = classifyError(msg);
+
+    if (category === 'transient') {
+      logger.warn('agent', 'run_mission 临时性失败，将由 job-queue 退避重试', {
+        missionId, attempt: ctx.attempt, error: msg,
+      });
+      // 临时性：mission 保持 running 状态，向上抛 → job-queue 计算下次重试时间
+      throw error;
+    }
+
+    // permanent：立即标 failed，不重试
+    logger.error('agent', 'run_mission 永久性失败', { missionId, error: msg });
     db.prepare(`UPDATE agent_missions SET status = 'failed', last_error = ?, finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(msg, missionId);
-    return { missionId, error: msg };
+    return { missionId, error: msg, classified: 'permanent' };
   }
 });
 
@@ -478,6 +616,7 @@ const RECURRING_JOBS: RecurringJob[] = [
   { name: 'jobs.cleanup', intervalMs: 24 * 60 * 60 * 1000, payload: { retainDays: 7 } },
   { name: 'agent.daily_schedule_tick', intervalMs: 5 * 60 * 1000, maxAttempts: 1 },
   { name: 'value_statement.monthly_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
+  { name: 'renewal.health_check_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
 ];
 
 const lastEnqueuedAt = new Map<string, number>();

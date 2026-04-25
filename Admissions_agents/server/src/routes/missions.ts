@@ -117,7 +117,7 @@ missionsRouter.post('/quick-start', requireRole(['admin', 'tenant_admin']), (req
   enqueueJob({
     name: 'agent.run_mission',
     payload: { missionId },
-    maxAttempts: 1,
+    maxAttempts: 3, // v3.4.c · 智能重试
     singletonKey: `mission:${missionId}`,
   });
 
@@ -177,7 +177,7 @@ missionsRouter.post('/', requireRole(['admin', 'tenant_admin']), (req: AuthedReq
   enqueueJob({
     name: 'agent.run_mission',
     payload: { missionId },
-    maxAttempts: 1,
+    maxAttempts: 3, // v3.4.c · 智能重试
     singletonKey: `mission:${missionId}`,
   });
 

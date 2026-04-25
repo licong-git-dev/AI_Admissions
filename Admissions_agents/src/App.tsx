@@ -52,6 +52,7 @@ const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'));
 const HomePanel = lazy(() => import('./components/HomePanel'));
 const ValueStatementPanel = lazy(() => import('./components/ValueStatementPanel'));
 const ReferralCenter = lazy(() => import('./components/ReferralCenter'));
+const SpecialistPerformance = lazy(() => import('./components/SpecialistPerformance'));
 
 type LeadPreset = {
   searchText?: string;
@@ -713,6 +714,18 @@ export default function App() {
                 className="h-full"
               >
                 <ReferralCenter />
+              </motion.div>
+            )}
+
+            {activeTab === 'performance' && (
+              <motion.div
+                key="performance"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <SpecialistPerformance />
               </motion.div>
             )}
           </AnimatePresence>

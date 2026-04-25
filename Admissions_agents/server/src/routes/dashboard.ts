@@ -431,6 +431,131 @@ dashboardRouter.get('/agent-personas', (_req, res) => {
   res.json({ success: true, data: AGENT_PERSONAS, error: null });
 });
 
+// v3.4.a · 专员业绩仪表盘
+// 提成率：从环境变量取，默认 8%（行业常见 5-15%）
+const SPECIALIST_COMMISSION_RATE = (() => {
+  const raw = Number(process.env.SPECIALIST_COMMISSION_RATE);
+  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.08;
+})();
+
+dashboardRouter.get('/specialist-performance', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+
+  // 时间窗口：本周（周一起）/ 本月 / 上月
+  const now = new Date();
+  const startOfWeek = new Date(now);
+  const dow = now.getDay() === 0 ? 7 : now.getDay(); // Sunday→7
+  startOfWeek.setDate(now.getDate() - (dow - 1));
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+  const endOfPrevMonth = startOfMonth;
+
+  type SpecialistRow = {
+    user_id: number;
+    name: string;
+    leads_total: number;
+    leads_high_intent: number;
+    leads_enrolled: number;
+    deals_count_month: number;
+    tuition_month_fen: number;
+    deals_count_prev_month: number;
+    tuition_prev_month_fen: number;
+    deals_count_week: number;
+    tuition_week_fen: number;
+  };
+
+  // 拉本租户所有 specialist + tenant_admin 的业绩数据
+  const rows = db.prepare(`
+    SELECT
+      u.id as user_id,
+      u.name as name,
+      (SELECT COUNT(*) FROM leads l WHERE l.tenant = ? AND l.assignee = u.name) as leads_total,
+      (SELECT COUNT(*) FROM leads l WHERE l.tenant = ? AND l.assignee = u.name AND l.intent = 'high' AND l.status NOT IN ('enrolled', 'lost')) as leads_high_intent,
+      (SELECT COUNT(*) FROM leads l WHERE l.tenant = ? AND l.assignee = u.name AND l.status = 'enrolled') as leads_enrolled,
+      (SELECT COUNT(*) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ?) as deals_count_month,
+      (SELECT COALESCE(SUM(d.total_tuition), 0) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ?) as tuition_month_fen,
+      (SELECT COUNT(*) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ? AND d.signed_at < ?) as deals_count_prev_month,
+      (SELECT COALESCE(SUM(d.total_tuition), 0) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ? AND d.signed_at < ?) as tuition_prev_month_fen,
+      (SELECT COUNT(*) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ?) as deals_count_week,
+      (SELECT COALESCE(SUM(d.total_tuition), 0) FROM deals d WHERE d.tenant = ? AND d.assignee_user_id = u.id AND d.signed_at >= ?) as tuition_week_fen
+    FROM users u
+    WHERE u.tenant = ? AND u.is_active = 1 AND u.role IN ('specialist', 'tenant_admin')
+    ORDER BY u.id ASC
+  `).all(
+    tenant, tenant, tenant,
+    tenant, startOfMonth, tenant, startOfMonth,
+    tenant, startOfPrevMonth, endOfPrevMonth, tenant, startOfPrevMonth, endOfPrevMonth,
+    tenant, startOfWeek.toISOString(), tenant, startOfWeek.toISOString(),
+    tenant
+  ) as SpecialistRow[];
+
+  // 专员视图按本月学费排名；将本人单独抽出
+  const enriched = rows.map((r) => {
+    const monthCommissionFen = Math.round(r.tuition_month_fen * SPECIALIST_COMMISSION_RATE);
+    const prevCommissionFen = Math.round(r.tuition_prev_month_fen * SPECIALIST_COMMISSION_RATE);
+    const conversionRate = r.leads_total === 0 ? 0 : Math.round((r.leads_enrolled / r.leads_total) * 1000) / 10;
+    const trendPct = r.tuition_prev_month_fen === 0
+      ? (r.tuition_month_fen > 0 ? 100 : 0)
+      : Math.round(((r.tuition_month_fen - r.tuition_prev_month_fen) / r.tuition_prev_month_fen) * 100);
+
+    return {
+      userId: r.user_id,
+      name: r.name,
+      isMe: r.user_id === user.sub,
+      leadsTotal: r.leads_total,
+      leadsHighIntent: r.leads_high_intent,
+      leadsEnrolled: r.leads_enrolled,
+      conversionRate,
+      // 本月
+      monthDealsCount: r.deals_count_month,
+      monthTuitionFen: r.tuition_month_fen,
+      monthCommissionFen,
+      // 上月对比
+      prevMonthTuitionFen: r.tuition_prev_month_fen,
+      prevMonthCommissionFen: prevCommissionFen,
+      trendPct,
+      // 本周
+      weekDealsCount: r.deals_count_week,
+      weekTuitionFen: r.tuition_week_fen,
+      weekCommissionFen: Math.round(r.tuition_week_fen * SPECIALIST_COMMISSION_RATE),
+    };
+  });
+
+  // 按本月成交学费降序排
+  const ranked = [...enriched].sort((a, b) => b.monthTuitionFen - a.monthTuitionFen);
+  ranked.forEach((row, idx) => {
+    (row as typeof row & { rank: number }).rank = idx + 1;
+  });
+
+  const me = ranked.find((r) => r.isMe) ?? null;
+  const teamTotal = ranked.reduce((acc, r) => ({
+    deals: acc.deals + r.monthDealsCount,
+    tuitionFen: acc.tuitionFen + r.monthTuitionFen,
+    commissionFen: acc.commissionFen + r.monthCommissionFen,
+  }), { deals: 0, tuitionFen: 0, commissionFen: 0 });
+
+  res.json({
+    success: true,
+    data: {
+      commissionRate: SPECIALIST_COMMISSION_RATE,
+      me,
+      ranking: ranked,
+      teamTotal,
+      windowLabels: {
+        weekStart: startOfWeek.toISOString(),
+        monthStart: startOfMonth,
+      },
+    },
+    error: null,
+  });
+});
+
 // v3.3.b · 月度价值账单
 dashboardRouter.get('/value-statement/latest', (req, res) => {
   const user = (req as AuthedRequest).user;

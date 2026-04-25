@@ -1,5 +1,6 @@
 import { db } from '../src/db';
 import { logger } from './logger';
+import { classifyError } from './error-classifier';
 
 export type JobHandler<T = Record<string, unknown>> = (
   payload: T,
@@ -88,7 +89,10 @@ const markSucceeded = (jobId: number, result: unknown): void => {
 };
 
 const markFailed = (jobId: number, errorMessage: string, attempts: number, maxAttempts: number): void => {
-  const finalStatus = attempts >= maxAttempts ? 'failed' : 'queued';
+  // v3.4.c · 智能重试：永久性错误立即失败，不浪费重试预算
+  const category = classifyError(errorMessage);
+  const exhausted = attempts >= maxAttempts;
+  const finalStatus = (category === 'permanent' || exhausted) ? 'failed' : 'queued';
   const retryAt = finalStatus === 'queued'
     ? new Date(Date.now() + Math.min(60_000 * Math.pow(2, attempts - 1), 30 * 60_000)).toISOString()
     : null;
@@ -125,12 +129,14 @@ export const runJobTick = async (): Promise<void> => {
     logger.info('jobs', '作业成功', { jobId: job.id, name: job.name, attempt: job.attempts });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const category = classifyError(message);
     markFailed(job.id, message, job.attempts, job.max_attempts);
     logger.warn('jobs', '作业失败', {
       jobId: job.id,
       name: job.name,
       attempt: job.attempts,
       maxAttempts: job.max_attempts,
+      category,
       error: message,
     });
   }
