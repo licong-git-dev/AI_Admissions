@@ -27,6 +27,7 @@ import { platformRouter } from './routes/platform';
 import { metricsRouter } from './routes/metrics';
 import { missionsRouter } from './routes/missions';
 import { adminReferralRouter, referralsPublicRouter, studentReferralRouter } from './routes/referrals';
+import { adminEvaluationRouter, studentEvaluationRouter } from './routes/evaluations';
 import { requireAuth, requireRole, type AuthedRequest } from './middleware/auth';
 import { auditLog } from './middleware/audit';
 
@@ -49,6 +50,7 @@ app.use('/api/deposits', depositsRouter);
 app.use('/api/wechat-work', wechatWorkRouter);
 app.use('/api/referrals/public', referralsPublicRouter);
 app.use('/api/student/referrals', studentReferralRouter);
+app.use('/api/student/evaluations', studentEvaluationRouter);
 
 // 从这里往下的所有 /api/** 路由需要登录 + 审计留痕
 app.use('/api', (req, res, next) => {
@@ -84,6 +86,7 @@ app.use('/api/audit', auditRouter);
 app.use('/api/platform', platformRouter);
 app.use('/api/missions', missionsRouter);
 app.use('/api/referrals', requireRole(['admin', 'tenant_admin']), adminReferralRouter);
+app.use('/api/evaluations', requireRole(['admin', 'tenant_admin']), adminEvaluationRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const isDevelopment = config.nodeEnv === 'development';

@@ -364,6 +364,26 @@ db.exec(`
     FOREIGN KEY (referrer_lead_id) REFERENCES leads (id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS student_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    lead_id INTEGER NOT NULL,
+    phone TEXT NOT NULL,
+    score_advisor INTEGER NOT NULL DEFAULT 0,
+    score_learning INTEGER NOT NULL DEFAULT 0,
+    score_payment INTEGER NOT NULL DEFAULT 0,
+    score_materials INTEGER NOT NULL DEFAULT 0,
+    score_overall INTEGER NOT NULL DEFAULT 0,
+    avg_score REAL NOT NULL DEFAULT 0,
+    feedback TEXT,
+    is_complaint INTEGER NOT NULL DEFAULT 0,
+    is_published INTEGER NOT NULL DEFAULT 1,
+    ip TEXT,
+    ua TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS referral_rewards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant TEXT NOT NULL DEFAULT 'default',
@@ -602,6 +622,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_referral_codes_referrer ON referral_codes(referrer_lead_id);
   CREATE INDEX IF NOT EXISTS idx_referral_rewards_tenant_status ON referral_rewards(tenant, status);
   CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_lead_id);
+  CREATE INDEX IF NOT EXISTS idx_student_evaluations_tenant ON student_evaluations(tenant);
+  CREATE INDEX IF NOT EXISTS idx_student_evaluations_lead ON student_evaluations(lead_id);
+  CREATE INDEX IF NOT EXISTS idx_student_evaluations_complaint ON student_evaluations(is_complaint);
 `);
 
 const columnExists = (table: string, column: string): boolean => {

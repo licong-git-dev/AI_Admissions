@@ -14,8 +14,10 @@ import {
   CheckCircle2,
   Plus,
   Trash2,
+  Star,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { authJson } from '../lib/auth';
 
 type Agreement = {
   id: number;
@@ -64,13 +66,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return payload.data as T;
 }
 
-type TabKey = 'agreements' | 'consents' | 'requests' | 'violation_words';
+type TabKey = 'agreements' | 'consents' | 'requests' | 'violation_words' | 'evaluations';
 
 const TABS: Array<{ key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { key: 'agreements', label: '协议管理', icon: FileText },
   { key: 'consents', label: '授权记录', icon: UserCheck },
   { key: 'requests', label: '数据请求', icon: Database },
   { key: 'violation_words', label: '违规词库', icon: Ban },
+  { key: 'evaluations', label: '学员评价', icon: Star },
 ];
 
 type ComplianceSummary = {
@@ -259,6 +262,7 @@ function ComplianceCenter() {
       {activeTab === 'consents' && <ConsentsTab />}
       {activeTab === 'requests' && <DataRequestsTab />}
       {activeTab === 'violation_words' && <ViolationWordsTab />}
+      {activeTab === 'evaluations' && <EvaluationsTab />}
     </div>
   );
 }
@@ -736,6 +740,119 @@ function ViolationWordsTab() {
         <CheckCircle2 className="w-3 h-3 inline mr-1 text-emerald-500" />
         修改后 AI 调用会立即生效（测评报告生成前会从 DB 动态读取）
       </div>
+    </div>
+  );
+}
+
+// v3.6.a · 学员评价
+type Evaluation = {
+  id: number;
+  tenant: string;
+  leadId: number;
+  nickname: string;
+  scores: {
+    advisor: number;
+    learning: number;
+    payment: number;
+    materials: number;
+    overall: number;
+  };
+  avgScore: number;
+  feedback: string | null;
+  isComplaint: boolean;
+  createdAt: string;
+};
+
+type EvalStats = {
+  total: number;
+  avgScore: number;
+  complaints: number;
+  complaintRate: number;
+};
+
+function EvaluationsTab() {
+  const [data, setData] = useState<{ stats: EvalStats; evaluations: Evaluation[] } | null>(null);
+  const [filter, setFilter] = useState<'all' | 'complaints'>('all');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const result = await authJson<{ stats: EvalStats; evaluations: Evaluation[] }>('/api/evaluations?limit=200');
+        setData(result);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '加载失败');
+      }
+    })();
+  }, []);
+
+  if (error) {
+    return <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>;
+  }
+  if (!data) return <div className="p-12 text-center text-gray-400">加载中…</div>;
+
+  const filtered = filter === 'complaints' ? data.evaluations.filter((e) => e.isComplaint) : data.evaluations;
+
+  return (
+    <div className="space-y-4">
+      {/* 统计 */}
+      <div className="grid grid-cols-4 gap-3">
+        <StatBox label="评价总数" value={data.stats.total} />
+        <StatBox label="平均分" value={data.stats.avgScore.toFixed(2)} accent={data.stats.avgScore >= 4 ? 'emerald' : data.stats.avgScore >= 3 ? 'amber' : 'red'} />
+        <StatBox label="投诉数" value={data.stats.complaints} accent={data.stats.complaints > 0 ? 'red' : 'gray'} />
+        <StatBox label="投诉率" value={`${data.stats.complaintRate}%`} accent={data.stats.complaintRate >= 30 ? 'red' : data.stats.complaintRate >= 10 ? 'amber' : 'gray'} />
+      </div>
+
+      <div className="flex gap-2 text-xs">
+        <button
+          onClick={() => setFilter('all')}
+          className={cn('px-3 py-1 rounded', filter === 'all' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')}
+        >全部 ({data.evaluations.length})</button>
+        <button
+          onClick={() => setFilter('complaints')}
+          className={cn('px-3 py-1 rounded', filter === 'complaints' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600')}
+        >只看投诉 ({data.stats.complaints})</button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="p-12 text-center text-sm text-gray-500 bg-gray-50 rounded-xl">
+          暂无评价。学员在 Portal 完成报名后会看到「给我们打分」入口。
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((e) => (
+            <div key={e.id} className={cn('p-3 border rounded-lg', e.isComplaint ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200')}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm">{e.nickname}</span>
+                    {e.isComplaint && <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded">⚠️ 投诉</span>}
+                    <span className="text-xs text-gray-500">租户 {e.tenant}</span>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    顾问 {e.scores.advisor}/5 · 学习 {e.scores.learning}/5 · 缴费 {e.scores.payment}/5 · 材料 {e.scores.materials}/5 · 总体 {e.scores.overall}/5
+                  </div>
+                  {e.feedback && <div className="mt-2 text-xs text-gray-800 bg-gray-50 p-2 rounded italic">"{e.feedback}"</div>}
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-amber-600">{e.avgScore.toFixed(1)}</div>
+                  <div className="text-[10px] text-gray-400">{e.createdAt.slice(0, 10)}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatBox({ label, value, accent }: { label: string; value: number | string; accent?: 'emerald' | 'amber' | 'red' | 'gray' }) {
+  const cls = accent === 'emerald' ? 'text-emerald-600' : accent === 'amber' ? 'text-amber-600' : accent === 'red' ? 'text-red-600' : 'text-gray-900';
+  return (
+    <div className="p-3 bg-white border border-gray-200 rounded-lg">
+      <div className="text-[11px] text-gray-500">{label}</div>
+      <div className={cn('text-xl font-semibold mt-0.5', cls)}>{value}</div>
     </div>
   );
 }

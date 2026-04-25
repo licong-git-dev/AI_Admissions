@@ -106,78 +106,83 @@ export const collectTenantStats = (tenant: string): BriefingStats => {
 };
 
 const buildPrompt = (stats: BriefingStats, tenant: string, date: string): string => {
-  const persona = getPersona('xiaobao');
-  return `你是"${persona.name}"，${persona.role}，${persona.tagline}。
-你的语气风格：${persona.tone}。
+  const xz = getPersona('xiaozhao');
+  const xx = getPersona('xiaoxian');
+  const xb = getPersona('xiaobao');
+  return `你是"${xb.name}"，作为团队主笔，要协调写一份「${date}」三人小队的日报。
 
-请为租户「${tenant}」生成今日（${date}）工作战报，用第一人称写给老板看。
+团队成员：
+- 🎯 ${xz.name}（${xz.role}）：${xz.tagline}。语气：${xz.tone}
+- 🕸️ ${xx.name}（${xx.role}）：${xx.tagline}。语气：${xx.tone}
+- 📊 ${xb.name}（${xb.role}）：${xb.tagline}。语气：${xb.tone}
 
-今日（过去 24 小时）关键数据：
-- 新增线索：${stats.leadsNew} 条（其中高意向 ${stats.leadsHighIntentNew} 条）
-- 我扫描的私信/评论：${stats.dmsScanned} 条
-- 我起草的内容：${stats.contentDrafted} 条
-- 通过审核的内容：${stats.contentApproved} 条
-- 已发布的内容：${stats.contentPublished} 条
-- 我（或其他 AI 同事）执行的任务：${stats.missionsRun} 个（成功 ${stats.missionsSucceeded}，失败 ${stats.missionsFailed}）
-- 自动审批通过的动作：${stats.autoApproved} 次
-- 近 7 天成交：${stats.dealsLast7d} 单
-- 当前在线 RPA 账号：${stats.rpaLoggedIn} 个
+今日（过去 24 小时）数据：
+- 新增线索：${stats.leadsNew} 条（高意向 ${stats.leadsHighIntentNew} 条）
+- 私信/评论扫描：${stats.dmsScanned} 条
+- 内容草稿：${stats.contentDrafted} 条 / 通过 ${stats.contentApproved} / 发布 ${stats.contentPublished}
+- 任务执行：${stats.missionsRun} 个（成功 ${stats.missionsSucceeded}，失败 ${stats.missionsFailed}）
+- 自动审批：${stats.autoApproved} 次
+- 近 7 天成交：${stats.dealsLast7d} 单 · 在线 RPA：${stats.rpaLoggedIn} 个
 
 输出要求：
-1. 格式：Markdown，80-200 字
-2. 开头一句问候，语气自然不做作（不要用"尊敬的""您好"这类客套话）
-3. 中间用 2-4 个简短小段汇报重点（数字只引用最突出的 3-5 个，不要流水账）
-4. 结尾给出 1 个明天打算做的事情，或一个需要老板关注的隐患（有就说，没有就说"今天没什么意外"）
-5. 全零时不要假装热闹，要诚实：例如"今天数据是 0，我明天加把劲"
-6. 失败数 > 0 时必须在最后提一下
-7. 不要使用"综上所述""总而言之"这类书面套话
+- 格式：纯文本（不要代码块、不要 Markdown 表格），180-320 字
+- 三段式：
+  1. 「🎯 小招说：」用小招的口吻汇报内容相关数据 + 1 句明天打算（30-60 字）
+  2. 「🕸️ 小线说：」用小线的口吻汇报私信/线索数据 + 1 句明天打算（30-60 字）
+  3. 「📊 小报说：」用小报的口吻做综合点评 + 给老板 1 个建议（40-80 字）
+- 数据为 0 时要诚实，不要假装热闹
+- 失败数 > 0 必须在小报段提到
+- 不要"综上所述""总而言之"这类套话
+- 三段必须各自有"明天我打算"或"建议"的句子，体现"会思考"
 
-只输出战报正文，不要代码块、不要 JSON。`;
+只输出三段正文。`;
 };
 
 const buildTemplate = (stats: BriefingStats, _tenant: string, date: string): string => {
-  const p = getPersona('xiaobao');
+  const xb = getPersona('xiaobao');
   const lines: string[] = [];
 
-  // 第一句：问候 + 今日定调
-  if (stats.leadsNew === 0 && stats.contentDrafted === 0 && stats.missionsRun === 0) {
-    lines.push(`老板，${date} 这一天安静得有点过分。`);
-  } else if (stats.leadsHighIntentNew >= 3) {
-    lines.push(`老板，${date} 有料，来了 **${stats.leadsHighIntentNew}** 条高意向线索。`);
-  } else {
-    lines.push(`老板，${date} 的战报来了。`);
-  }
-
-  // 中段：数据重点
-  if (stats.dmsScanned > 0) {
-    lines.push(`\n**小线今天扫了 ${stats.dmsScanned} 条**私信 / 评论，${stats.leadsNew > 0 ? `圈出 ${stats.leadsNew} 条转成了线索` : '今天还没成线索'}。`);
-  }
+  // 🎯 小招说
   if (stats.contentDrafted > 0 || stats.contentApproved > 0) {
-    const seg = [`**小招**写了 ${stats.contentDrafted} 条内容`];
-    if (stats.contentApproved > 0) seg.push(`通过审核 ${stats.contentApproved} 条`);
-    if (stats.contentPublished > 0) seg.push(`真正发出去 ${stats.contentPublished} 条`);
-    lines.push('\n' + seg.join('，') + '。');
-  }
-  if (stats.autoApproved > 0) {
-    lines.push(`\n自动审批帮你省下 **${stats.autoApproved}** 次点按。`);
-  }
-  if (stats.missionsSucceeded > 0 || stats.missionsFailed > 0) {
-    lines.push(`\n今天我们跑了 ${stats.missionsRun} 个任务（成功 ${stats.missionsSucceeded}${stats.missionsFailed > 0 ? `、失败 ${stats.missionsFailed}` : ''}）。`);
-  }
-
-  // 结尾：明日计划 / 告警
-  if (stats.missionsFailed > 0) {
-    lines.push(`\n⚠️ 有 **${stats.missionsFailed}** 个任务失败了，去 AI 员工详情页看一眼。`);
-  } else if (stats.rpaLoggedIn < 3) {
-    lines.push(`\n⚠️ 在线 RPA 账号只剩 **${stats.rpaLoggedIn}** 个，建议补登录（至少 3 个才经得起一次封号）。`);
-  } else if (stats.leadsNew === 0) {
-    lines.push(`\n明天我打算让小招多写 1 条内容，看看能不能把流量搞起来。`);
+    const parts = [`今天我起草了 ${stats.contentDrafted} 条内容`];
+    if (stats.contentApproved > 0) parts.push(`通过审核 ${stats.contentApproved} 条`);
+    if (stats.contentPublished > 0) parts.push(`真发出去 ${stats.contentPublished} 条`);
+    lines.push(`🎯 小招说：${parts.join('，')}。明天我打算多写 1 条「学员逆袭案例」型，转化通常更高。`);
   } else {
-    lines.push(`\n今天整体顺利，明天继续。`);
+    lines.push(`🎯 小招说：今天没出新内容。明天我打算补上 3 条，先把账户活跃起来。`);
   }
+  lines.push('');
 
-  lines.push(`\n\n${p.signature}`);
-  return lines.join('');
+  // 🕸️ 小线说
+  if (stats.dmsScanned > 0) {
+    lines.push(`🕸️ 小线说：今天扫了 ${stats.dmsScanned} 条私信和评论，${stats.leadsNew > 0 ? `圈出 ${stats.leadsNew} 条新线索（高意向 ${stats.leadsHighIntentNew} 条）` : '没圈到新线索'}。明天我重点盯 18:00-22:00 的高峰时段。`);
+  } else {
+    lines.push(`🕸️ 小线说：今天没扫到东西，可能 RPA 账号没登录。建议先去补一个，我才能干活。`);
+  }
+  lines.push('');
+
+  // 📊 小报说
+  const summary: string[] = [];
+  if (stats.missionsSucceeded > 0) summary.push(`完成 ${stats.missionsSucceeded} 个任务`);
+  if (stats.autoApproved > 0) summary.push(`自动审批省了 ${stats.autoApproved} 次点按`);
+  if (stats.dealsLast7d > 0) summary.push(`近 7 天成交 ${stats.dealsLast7d} 单`);
+  const summaryText = summary.length > 0 ? `综合看：${summary.join('，')}。` : '今天数据不算热闹。';
+
+  let advice = '';
+  if (stats.missionsFailed > 0) {
+    advice = `建议：去 AI 员工 → 失败 mission 接手区看一眼，有 ${stats.missionsFailed} 个任务失败了。`;
+  } else if (stats.rpaLoggedIn < 3) {
+    advice = `建议：在线 RPA 只剩 ${stats.rpaLoggedIn} 个，至少补到 3 个再说。`;
+  } else if (stats.leadsHighIntentNew >= 3) {
+    advice = `建议：今天来了 ${stats.leadsHighIntentNew} 条高意向，赶紧让小线扫一遍跟进话术，趁热打铁。`;
+  } else {
+    advice = `建议：明天先看看今天的内容数据回流，找出哪条最好用。`;
+  }
+  lines.push(`📊 小报说：${summaryText}${advice}`);
+
+  lines.push('');
+  lines.push(xb.signature);
+  return lines.join('\n');
 };
 
 let aiClient: GoogleGenAI | null = null;

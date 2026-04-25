@@ -305,6 +305,153 @@ leadsRouter.get('/:id/persona', (req, res) => {
   res.json({ success: true, data: persona, error: null });
 });
 
+// v3.6.b · 学员旅程时间线
+leadsRouter.get('/:id/journey', (req, res) => {
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
+  if (!isLeadAccessible(row, req as AuthedRequest)) {
+    return res.status(404).json({ success: false, data: null, error: '线索不存在' });
+  }
+  const leadId = row!.id;
+  const phone = row!.contact;
+
+  type EventRow = { stage: string; label: string; at: string; detail: string | null };
+  const events: EventRow[] = [];
+
+  // 1. 测评 / 留资
+  type SubmissionRow = { created_at: string; form_id: number };
+  const submission = db.prepare(
+    `SELECT created_at, form_id FROM lead_submissions WHERE lead_id = ? ORDER BY id ASC LIMIT 1`
+  ).get(leadId) as SubmissionRow | undefined;
+  if (submission) {
+    events.push({
+      stage: 'submission',
+      label: '完成测评 / 留资',
+      at: submission.created_at,
+      detail: `通过表单 #${submission.form_id} 提交`,
+    });
+  }
+
+  // 2. lead 创建（如果没有 submission，用 leads.created_at）
+  if (!submission) {
+    events.push({
+      stage: 'submission',
+      label: '线索建立',
+      at: row!.created_at,
+      detail: `来源：${row!.source}`,
+    });
+  }
+
+  // 3. 第一次跟进
+  type FollowupRow = { created_at: string; channel: string; content: string };
+  const firstFollowup = db.prepare(
+    `SELECT created_at, channel, content FROM followups WHERE lead_id = ? ORDER BY id ASC LIMIT 1`
+  ).get(leadId) as FollowupRow | undefined;
+  if (firstFollowup) {
+    events.push({
+      stage: 'first_contact',
+      label: '首次跟进',
+      at: firstFollowup.created_at,
+      detail: `[${firstFollowup.channel}] ${firstFollowup.content.slice(0, 40)}`,
+    });
+  }
+
+  // 4. 高意向（intent 升级到 high 的时间，近似用最新 followup 时间，简化处理）
+  if (row!.intent === 'high' && firstFollowup) {
+    type LatestRow = { c: number; latest: string };
+    const latest = db.prepare(
+      `SELECT COUNT(*) as c, MAX(created_at) as latest FROM followups WHERE lead_id = ?`
+    ).get(leadId) as LatestRow;
+    if (latest.c > 1) {
+      events.push({
+        stage: 'high_intent',
+        label: '识别为高意向',
+        at: latest.latest,
+        detail: `累计跟进 ${latest.c} 次`,
+      });
+    }
+  }
+
+  // 5. 定金
+  if (phone) {
+    type DepositRow = { paid_at: string; amount: number };
+    const depositPaid = db.prepare(
+      `SELECT paid_at, amount FROM deposits WHERE phone = ? AND status = 'paid' ORDER BY paid_at ASC LIMIT 1`
+    ).get(phone) as DepositRow | undefined;
+    if (depositPaid) {
+      events.push({
+        stage: 'deposit_paid',
+        label: '缴定金',
+        at: depositPaid.paid_at,
+        detail: `¥${(depositPaid.amount / 100).toFixed(0)}`,
+      });
+    }
+  }
+
+  // 6. 成交（deal 创建）
+  type DealRow = { signed_at: string; total_tuition: number; school_name: string; major_name: string };
+  const deal = db.prepare(
+    `SELECT signed_at, total_tuition, school_name, major_name FROM deals WHERE lead_id = ? ORDER BY id ASC LIMIT 1`
+  ).get(leadId) as DealRow | undefined;
+  if (deal) {
+    events.push({
+      stage: 'deal_signed',
+      label: '签约成交',
+      at: deal.signed_at,
+      detail: `${deal.school_name} ${deal.major_name} · ¥${(deal.total_tuition / 100).toFixed(0)}`,
+    });
+  }
+
+  // 7. enrollment（入学/在读）
+  type EnrollmentRow = { stage: string };
+  const enrollment = db.prepare(
+    `SELECT stage FROM enrollments WHERE lead_id = ? ORDER BY id ASC LIMIT 1`
+  ).get(leadId) as EnrollmentRow | undefined;
+  if (enrollment && row!.status === 'enrolled') {
+    events.push({
+      stage: 'enrolled',
+      label: '完成报名',
+      at: row!.updated_at,
+      detail: enrollment.stage,
+    });
+  }
+
+  // 8. 评价
+  type EvalRow = { created_at: string; avg_score: number; is_complaint: number };
+  const evaluation = db.prepare(
+    `SELECT created_at, avg_score, is_complaint FROM student_evaluations WHERE lead_id = ? ORDER BY id DESC LIMIT 1`
+  ).get(leadId) as EvalRow | undefined;
+  if (evaluation) {
+    events.push({
+      stage: 'evaluation',
+      label: '学员评价',
+      at: evaluation.created_at,
+      detail: `${evaluation.avg_score.toFixed(2)} 分${evaluation.is_complaint ? ' · 含投诉' : ''}`,
+    });
+  }
+
+  // 排序 + 计算"卡住"信息
+  events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+  const lastEventAt = events.length > 0 ? new Date(events[events.length - 1].at).getTime() : new Date(row!.created_at).getTime();
+  const stagnantDays = Math.floor((Date.now() - lastEventAt) / (24 * 60 * 60 * 1000));
+
+  // 推断当前阶段
+  const currentStage = events.length > 0 ? events[events.length - 1].stage : 'submission';
+
+  res.json({
+    success: true,
+    data: {
+      leadId,
+      currentStage,
+      currentStatus: row!.status,
+      events,
+      stagnantDays,
+      isStuck: stagnantDays >= 7 && !['enrolled', 'evaluation', 'lost'].includes(currentStage),
+    },
+    error: null,
+  });
+});
+
 leadsRouter.get('/:id', (req, res) => {
   const row = getLeadRow(req.params.id, req as AuthedRequest);
   if (!isLeadAccessible(row, req as AuthedRequest)) {

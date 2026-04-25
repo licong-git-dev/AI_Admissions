@@ -33,6 +33,27 @@ interface LeadManagementProps {
   };
 }
 
+// v3.6.b
+type JourneyEvent = { stage: string; label: string; at: string; detail: string | null };
+type LeadJourney = {
+  leadId: number;
+  currentStage: string;
+  currentStatus: string;
+  events: JourneyEvent[];
+  stagnantDays: number;
+  isStuck: boolean;
+};
+
+const JOURNEY_STAGE_ICON: Record<string, string> = {
+  submission: '📝',
+  first_contact: '👋',
+  high_intent: '🔥',
+  deposit_paid: '💰',
+  deal_signed: '✅',
+  enrolled: '🎓',
+  evaluation: '⭐',
+};
+
 const defaultAnalysis = (lead: Lead): IntentAnalysis => ({
   intent: lead.intent,
   analysis: '该用户询问了具体报名流程，表现出较强的转化意愿。建议重点介绍当前优惠政策并引导添加微信。',
@@ -132,6 +153,7 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
   const [callPrepLoading, setCallPrepLoading] = useState(false);
   const [personaLoading, setPersonaLoading] = useState(false);
   const [personaError, setPersonaError] = useState('');
+  const [journey, setJourney] = useState<LeadJourney | null>(null);
   const [callOutcome, setCallOutcome] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,6 +268,12 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
     setProposalCopyText('');
     setAiAnalysis(null);
     setAiLoading(true);
+    setJourney(null);
+
+    // v3.6.b · 异步加载旅程时间线（不阻塞主流程）
+    void fetchJson<LeadJourney>(`/api/leads/${lead.id}/journey`)
+      .then((j) => { if (leadRequestIdRef.current === requestId) setJourney(j); })
+      .catch(() => { /* ignore */ });
 
     let detail = lead;
 
@@ -774,6 +802,42 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
                     </div>
                   )}
                 </div>
+
+                {/* v3.6.b · 学员旅程时间线 */}
+                {journey && journey.events.length > 0 && (
+                  <div className="p-5 bg-blue-50 rounded-2xl border border-blue-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-blue-700">
+                        <span className="text-base">🗺️</span>
+                        <span className="text-sm font-bold uppercase tracking-wider">学员旅程</span>
+                      </div>
+                      {journey.isStuck && (
+                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] rounded-full">
+                          ⚠️ 卡住 {journey.stagnantDays} 天
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      {journey.events.map((ev, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <div className="shrink-0 w-7 h-7 rounded-full bg-white border border-blue-200 flex items-center justify-center text-xs">
+                            {JOURNEY_STAGE_ICON[ev.stage] ?? '·'}
+                          </div>
+                          <div className="flex-1 min-w-0 pt-1">
+                            <div className="text-xs font-semibold text-blue-900">{ev.label}</div>
+                            {ev.detail && <div className="text-[11px] text-gray-600 truncate">{ev.detail}</div>}
+                            <div className="text-[10px] text-gray-400">{new Date(ev.at).toLocaleString('zh-CN')}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {!journey.isStuck && journey.events.length < 5 && (
+                      <div className="text-[10px] text-gray-500 italic">
+                        提示：建议把这条线索推到下一步「{nextStageHint(journey.currentStage)}」
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4">
                   <div className="flex items-center justify-between">
@@ -1353,4 +1417,16 @@ function PersonaTag({ label, value }: { label: string; value: string }) {
       <span className="text-xs text-purple-900 font-medium">{PERSONA_LABELS[value] ?? value}</span>
     </div>
   );
+}
+
+function nextStageHint(currentStage: string): string {
+  switch (currentStage) {
+    case 'submission': return '联系并安排首次跟进';
+    case 'first_contact': return '把握高意向信号，推送方案';
+    case 'high_intent': return '引导缴定金锁定意向';
+    case 'deposit_paid': return '推动签约与缴学费';
+    case 'deal_signed': return '完成报名材料 + 入学';
+    case 'enrolled': return '邀请学员评价（v3.6.a）';
+    default: return '继续推进';
+  }
 }

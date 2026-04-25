@@ -409,6 +409,7 @@ function PortalDashboard({ profile, onLogout }: { profile: StudentProfile | null
         )}
 
         <ReferralWidget />
+        <EvaluationWidget />
 
         <div className="pt-6 text-center text-xs text-gray-400 space-y-1">
           <div>遇到问题请联系招生顾问</div>
@@ -519,6 +520,154 @@ function Mini({ label, value, accent }: { label: string; value: number | string;
     <div className="p-2 bg-white rounded border border-gray-100">
       <div className="text-[10px] text-gray-500">{label}</div>
       <div className={cn('text-lg font-semibold', accent ?? 'text-gray-900')}>{value}</div>
+    </div>
+  );
+}
+
+// v3.6.a · 学员评价
+type EligibleData = { eligible: boolean; reason?: string; lastAt?: string; currentStatus?: string };
+
+const EVAL_DIMENSIONS: Array<{ key: 'scoreAdvisor' | 'scoreLearning' | 'scorePayment' | 'scoreMaterials' | 'scoreOverall'; label: string }> = [
+  { key: 'scoreAdvisor', label: '顾问态度' },
+  { key: 'scoreLearning', label: '学习指导' },
+  { key: 'scorePayment', label: '缴费透明' },
+  { key: 'scoreMaterials', label: '材料办理' },
+  { key: 'scoreOverall', label: '总体满意度' },
+];
+
+function EvaluationWidget() {
+  const [eligible, setEligible] = useState<EligibleData | null>(null);
+  const [scores, setScores] = useState<Record<string, number>>({});
+  const [feedback, setFeedback] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState<{ avgScore: number; isComplaint: boolean } | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await studentJson<EligibleData>('/api/student/evaluations/eligible');
+        setEligible(data);
+      } catch {
+        // ignore
+      }
+    };
+    void load();
+  }, []);
+
+  if (!eligible) return null;
+  if (done) {
+    return (
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
+        <div className="text-emerald-700 font-semibold">⭐ 评价已提交，谢谢！</div>
+        <div className="text-xs text-emerald-600 mt-1">
+          平均分 {done.avgScore.toFixed(2)} · {done.isComplaint ? '我们已收到投诉，平台会跟进处理' : '我们会持续改进'}
+        </div>
+      </div>
+    );
+  }
+
+  if (!eligible.eligible) {
+    if (eligible.reason === 'not_enrolled') {
+      return null; // 还没报名不展示
+    }
+    if (eligible.reason === 'recently_evaluated') {
+      return (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-500">
+          ⭐ 你上月已评价过（{eligible.lastAt?.slice(0, 10)}），30 天后可再评一次
+        </div>
+      );
+    }
+    return null;
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 text-left hover:shadow-sm"
+      >
+        <div className="text-sm font-semibold text-amber-700 flex items-center gap-2">
+          ⭐ 给我们打个分
+        </div>
+        <div className="text-xs text-amber-600 mt-1">
+          1 分钟，5 项打分 + 一句反馈。你的声音直接到平台和监管侧。
+        </div>
+      </button>
+    );
+  }
+
+  const submit = async () => {
+    setError('');
+    if (EVAL_DIMENSIONS.some((d) => !scores[d.key])) {
+      setError('请给 5 项都打分');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const data = await studentJson<{ avgScore: number; isComplaint: boolean }>('/api/student/evaluations', {
+        method: 'POST',
+        body: JSON.stringify({ ...scores, feedback }),
+      });
+      setDone(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '提交失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+      <div className="text-sm font-semibold text-amber-800">⭐ 给我们打个分</div>
+      {EVAL_DIMENSIONS.map((d) => (
+        <div key={d.key} className="flex items-center justify-between">
+          <div className="text-xs text-gray-700">{d.label}</div>
+          <div className="flex gap-1">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                onClick={() => setScores((prev) => ({ ...prev, [d.key]: n }))}
+                className={cn(
+                  'w-7 h-7 rounded text-sm transition-all',
+                  scores[d.key] === n ? 'bg-amber-500 text-white shadow' :
+                    scores[d.key] && scores[d.key]! >= n ? 'bg-amber-200 text-amber-800' :
+                      'bg-white text-gray-400 border border-gray-200'
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <textarea
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value.slice(0, 500))}
+        placeholder="简短反馈（可选，最多 500 字）"
+        className="w-full p-2 text-xs border border-amber-200 rounded resize-none"
+        rows={3}
+      />
+      {error && <div className="text-xs text-red-700">{error}</div>}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setOpen(false)}
+          className="flex-1 px-3 py-2 bg-white border border-gray-200 text-gray-700 text-xs rounded"
+        >
+          取消
+        </button>
+        <button
+          onClick={submit}
+          disabled={submitting}
+          className="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded disabled:opacity-50"
+        >
+          {submitting ? '提交中…' : '提交评价'}
+        </button>
+      </div>
+      <div className="text-[10px] text-gray-500 text-center">
+        任一项 ≤ 2 分会自动标为投诉，平台 24h 内介入
+      </div>
     </div>
   );
 }
