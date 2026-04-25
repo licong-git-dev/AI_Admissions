@@ -431,6 +431,157 @@ dashboardRouter.get('/agent-personas', (_req, res) => {
   res.json({ success: true, data: AGENT_PERSONAS, error: null });
 });
 
+// v3.5.a · 冷启动 7 日剧本
+dashboardRouter.get('/cold-start-playbook', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const tenant = user.tenant ?? 'default';
+
+  // 租户"年龄"：以本租户最早 user 的 created_at 为基准
+  type FirstUser = { first_at: string | null };
+  const firstUser = db.prepare(
+    `SELECT MIN(created_at) as first_at FROM users WHERE tenant = ?`
+  ).get(tenant) as FirstUser | undefined;
+
+  const tenantStartedAt = firstUser?.first_at ? new Date(firstUser.first_at) : new Date();
+  const tenantAgeDays = Math.max(1, Math.min(99, Math.floor(
+    (Date.now() - tenantStartedAt.getTime()) / (24 * 60 * 60 * 1000)
+  ) + 1));
+  const currentDay = Math.min(7, tenantAgeDays);
+
+  // 每天的检查 SQL
+  const checks = {
+    schoolsLoaded: ((db.prepare(`SELECT COUNT(*) as c FROM schools`).get() as { c: number }).c >= 3),
+    specialistsCreated: ((db.prepare(`SELECT COUNT(*) as c FROM users WHERE tenant = ? AND role = 'specialist'`).get(tenant) as { c: number }).c >= 1),
+    leadFormCreated: ((db.prepare(`SELECT COUNT(*) as c FROM lead_forms WHERE tenant = ? AND is_active = 1`).get(tenant) as { c: number }).c >= 1),
+    firstContentDrafted: ((db.prepare(`SELECT COUNT(*) as c FROM content_items WHERE tenant = ?`).get(tenant) as { c: number }).c >= 1),
+    firstContentApproved: ((db.prepare(`SELECT COUNT(*) as c FROM content_items WHERE tenant = ? AND status IN ('approved', 'published')`).get(tenant) as { c: number }).c >= 1),
+    rpaLoggedIn: ((db.prepare(`SELECT COUNT(*) as c FROM rpa_accounts WHERE tenant = ? AND cookies_json IS NOT NULL`).get(tenant) as { c: number }).c >= 1),
+    wechatAdminConfigured: ((db.prepare(`SELECT COUNT(*) as c FROM users WHERE tenant = ? AND role IN ('admin', 'tenant_admin') AND wechat_work_userid IS NOT NULL`).get(tenant) as { c: number }).c >= 1),
+    firstMission: ((db.prepare(`SELECT COUNT(*) as c FROM agent_missions WHERE tenant = ?`).get(tenant) as { c: number }).c >= 1),
+    firstFollowupMission: ((db.prepare(`SELECT COUNT(*) as c FROM agent_missions WHERE tenant = ? AND type = 'lead_followup_sweep'`).get(tenant) as { c: number }).c >= 1),
+    agreementReviewed: ((db.prepare(`SELECT COUNT(*) as c FROM agreements WHERE legal_reviewed = 1`).get() as { c: number }).c >= 1),
+    dailyBriefingScheduled: ((db.prepare(`SELECT COUNT(*) as c FROM agent_schedule_configs WHERE tenant = ? AND mission_type IN ('daily_briefing', 'daily_content_sprint') AND enabled = 1`).get(tenant) as { c: number }).c >= 1),
+    weeklyReportScheduled: ((db.prepare(`SELECT COUNT(*) as c FROM agent_schedule_configs WHERE tenant = ? AND mission_type = 'weekly_report' AND enabled = 1`).get(tenant) as { c: number }).c >= 1),
+  };
+
+  const tasks = [
+    {
+      day: 1,
+      id: 'd1_setup',
+      title: '今天只做一件事：把账号 + 院校 + 表单录进系统',
+      description: '至少 1 个专员账号 · 至少 3 所合作院校 · 至少 1 个 H5 测评表单',
+      whyItMatters: '没有素材 AI 啥都生成不出来。3 所院校是经验值，2 所选项太少 AI 容易重复，5 所以上反而决策疲劳。',
+      actionLabel: '去录入',
+      actionTab: 'settings',
+      isComplete: checks.schoolsLoaded && checks.specialistsCreated && checks.leadFormCreated,
+      subChecks: [
+        { label: '至少 3 所合作院校', done: checks.schoolsLoaded },
+        { label: '至少 1 个专员账号', done: checks.specialistsCreated },
+        { label: '至少 1 个测评表单', done: checks.leadFormCreated },
+      ],
+    },
+    {
+      day: 2,
+      id: 'd2_first_content',
+      title: '让小招写第一条内容 + 你审一眼',
+      description: 'AI 员工 → 「每日内容冲刺」 → 等 1-2 分钟 → 内容工厂审核 → 通过',
+      whyItMatters: 'AI 的水平要靠你自己测出来。第一条内容必须由你亲自审核，看口吻是否对路，不对就回到合作院校素材里加几句卖点。',
+      actionLabel: '去 AI 员工',
+      actionTab: 'agent',
+      isComplete: checks.firstContentDrafted && checks.firstContentApproved,
+      subChecks: [
+        { label: 'AI 已生成至少 1 条草稿', done: checks.firstContentDrafted },
+        { label: '至少 1 条通过审核', done: checks.firstContentApproved },
+      ],
+    },
+    {
+      day: 3,
+      id: 'd3_channels',
+      title: '接通推送通道：企微 + RPA（任选其一即可起步）',
+      description: '配置 admin 的企微 userid（让战报有地方推） · 登录至少 1 个 RPA 账号（让内容真发出去）',
+      whyItMatters: '企微 5 分钟搞定，RPA 需要扫码登录。先搞企微就有反馈循环（每天 19:00 收到战报），RPA 慢慢补。',
+      actionLabel: '去系统设置',
+      actionTab: 'settings',
+      isComplete: checks.wechatAdminConfigured || checks.rpaLoggedIn,
+      subChecks: [
+        { label: '企微 userid 已配（任一管理员）', done: checks.wechatAdminConfigured },
+        { label: 'RPA 账号已登录（任一）', done: checks.rpaLoggedIn },
+      ],
+    },
+    {
+      day: 4,
+      id: 'd4_compliance',
+      title: '过一遍合规中心',
+      description: '法务复审至少 1 份协议 · 浏览违规词库（默认已 50+）· 看监管速览',
+      whyItMatters: '教育广告法是真的会罚的。监管速览那 6 条是 2025 全年实战案例。法务复审不是手续，是给乙方一个"我看过了"的免责底线。',
+      actionLabel: '去合规中心',
+      actionTab: 'compliance',
+      isComplete: checks.agreementReviewed,
+      subChecks: [
+        { label: '至少 1 份协议法务复审', done: checks.agreementReviewed },
+      ],
+    },
+    {
+      day: 5,
+      id: 'd5_followup',
+      title: '让小线扫一次高意向线索',
+      description: 'AI 员工 → 「线索跟进扫描」 → 看推送给专员的话术清单',
+      whyItMatters: '到 Day 5 应该已经有几条线索了。让 AI 写话术比你自己写省 80% 时间，专员只需要"复制 + 改 1 句"。',
+      actionLabel: '去 AI 员工',
+      actionTab: 'agent',
+      isComplete: checks.firstFollowupMission,
+      subChecks: [
+        { label: '至少跑过 1 次 lead_followup_sweep', done: checks.firstFollowupMission },
+      ],
+    },
+    {
+      day: 6,
+      id: 'd6_automate',
+      title: '把每日战报 + 周报打开',
+      description: 'AI 员工 → 定时自动化 → 启用 daily_briefing 19:00 + weekly_report 周一 20:00',
+      whyItMatters: '前 5 天你是手动用系统，从今天起让系统按时找你。每天 19:00 看一眼战报 = 你的 5 分钟运维。',
+      actionLabel: '去定时自动化',
+      actionTab: 'agent',
+      isComplete: checks.dailyBriefingScheduled && checks.weeklyReportScheduled,
+      subChecks: [
+        { label: '每日战报已启用', done: checks.dailyBriefingScheduled },
+        { label: '每周报表已启用', done: checks.weeklyReportScheduled },
+      ],
+    },
+    {
+      day: 7,
+      id: 'd7_review',
+      title: '复盘第一周 + 决定下一步',
+      description: '看价值账单（即使数据少）· 看专员业绩榜 · 看疑似异常 · 决定下周打法',
+      whyItMatters: 'Day 7 是个分水岭。如果有 ≥ 5 条线索 / ≥ 1 单成交，下周可以加投入；否则要先把 Day 1 的素材库补厚再跑。',
+      actionLabel: '去价值账单',
+      actionTab: 'value-statement',
+      isComplete: false, // 复盘是动作，不是状态
+      subChecks: [],
+    },
+  ];
+
+  const completedCount = tasks.filter((t) => t.isComplete).length;
+  const currentTaskIndex = tasks.findIndex((t) => !t.isComplete);
+
+  res.json({
+    success: true,
+    data: {
+      tenantStartedAt: tenantStartedAt.toISOString(),
+      tenantAgeDays,
+      currentDay,
+      currentTaskId: currentTaskIndex >= 0 ? tasks[currentTaskIndex].id : null,
+      progressPct: Math.round((completedCount / 7) * 100),
+      completedCount,
+      tasks,
+    },
+    error: null,
+  });
+});
+
 // v3.4.a · 专员业绩仪表盘
 // 提成率：从环境变量取，默认 8%（行业常见 5-15%）
 const SPECIALIST_COMMISSION_RATE = (() => {

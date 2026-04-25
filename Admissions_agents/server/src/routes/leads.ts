@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db';
 import { getTenantScope, resolveTenantForWrite } from '../middleware/tenant';
 import type { AuthedRequest } from '../middleware/auth';
+import { inferLeadPersona, getStoredPersona } from '../services/lead-persona-inferer';
 
 type LeadRow = {
   id: number;
@@ -18,6 +19,7 @@ type LeadRow = {
   latest_followup_at: string | null;
   latest_next_action: string | null;
   latest_next_followup_at: string | null;
+  persona_json?: string | null;
 };
 
 const isLeadAccessible = (row: LeadRow | undefined, req: AuthedRequest): boolean => {
@@ -101,20 +103,27 @@ const normalizeText = (value: string | undefined, maxLength: number): string | u
   return trimmed.slice(0, maxLength);
 };
 
-const toLead = (row: LeadRow) => ({
-  id: String(row.id),
-  source: row.source,
-  nickname: row.nickname,
-  contact: row.contact ?? '',
-  intent: row.intent,
-  lastMessage: row.last_message,
-  status: row.status,
-  assignee: row.assignee ?? '未分配',
-  createdAt: row.created_at,
-  latestFollowupAt: row.latest_followup_at,
-  latestNextAction: row.latest_next_action,
-  latestNextFollowupAt: row.latest_next_followup_at,
-});
+const toLead = (row: LeadRow) => {
+  let persona: unknown = null;
+  if (row.persona_json) {
+    try { persona = JSON.parse(row.persona_json); } catch { persona = null; }
+  }
+  return {
+    id: String(row.id),
+    source: row.source,
+    nickname: row.nickname,
+    contact: row.contact ?? '',
+    intent: row.intent,
+    lastMessage: row.last_message,
+    status: row.status,
+    assignee: row.assignee ?? '未分配',
+    createdAt: row.created_at,
+    latestFollowupAt: row.latest_followup_at,
+    latestNextAction: row.latest_next_action,
+    latestNextFollowupAt: row.latest_next_followup_at,
+    persona,
+  };
+};
 
 const LEAD_WITH_LATEST_FOLLOWUP_SELECT = `
   SELECT
@@ -129,6 +138,7 @@ const LEAD_WITH_LATEST_FOLLOWUP_SELECT = `
     l.tenant,
     l.created_at,
     l.updated_at,
+    l.persona_json,
     latest.created_at as latest_followup_at,
     latest.next_action as latest_next_action,
     latest.next_followup_at as latest_next_followup_at
@@ -269,6 +279,30 @@ leadsRouter.get('/', (req, res) => {
     .all(...params) as LeadRow[];
 
   res.json({ success: true, data: rows.map(toLead), error: null });
+});
+
+// v3.5.b · 人设推断
+leadsRouter.post('/:id/infer-persona', async (req, res) => {
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
+  if (!isLeadAccessible(row, req as AuthedRequest)) {
+    return res.status(404).json({ success: false, data: null, error: '线索不存在' });
+  }
+  try {
+    const persona = await inferLeadPersona(row!.id);
+    res.json({ success: true, data: persona, error: null });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, data: null, error: msg });
+  }
+});
+
+leadsRouter.get('/:id/persona', (req, res) => {
+  const row = getLeadRow(req.params.id, req as AuthedRequest);
+  if (!isLeadAccessible(row, req as AuthedRequest)) {
+    return res.status(404).json({ success: false, data: null, error: '线索不存在' });
+  }
+  const persona = getStoredPersona(row!.id);
+  res.json({ success: true, data: persona, error: null });
 });
 
 leadsRouter.get('/:id', (req, res) => {

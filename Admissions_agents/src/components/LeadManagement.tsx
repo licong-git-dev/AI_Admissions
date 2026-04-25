@@ -130,6 +130,8 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
   const [aiLoading, setAiLoading] = useState(false);
   const [callPrep, setCallPrep] = useState<StudentProfileResult | null>(null);
   const [callPrepLoading, setCallPrepLoading] = useState(false);
+  const [personaLoading, setPersonaLoading] = useState(false);
+  const [personaError, setPersonaError] = useState('');
   const [callOutcome, setCallOutcome] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -415,6 +417,22 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
     }
   };
 
+  const handleInferPersona = async () => {
+    if (!selectedLead) return;
+    setPersonaLoading(true);
+    setPersonaError('');
+    try {
+      const persona = await fetchJson<Lead['persona']>(`/api/leads/${selectedLead.id}/infer-persona`, {
+        method: 'POST',
+      });
+      setSelectedLead({ ...selectedLead, persona });
+    } catch (err) {
+      setPersonaError(err instanceof Error ? err.message : '人设推断失败');
+    } finally {
+      setPersonaLoading(false);
+    }
+  };
+
   const handleSavePayment = async () => {
     if (!selectedLead) return;
 
@@ -696,6 +714,67 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* v3.5.b · AI 学员人设 */}
+                <div className="p-5 bg-purple-50 rounded-2xl border border-purple-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-purple-700">
+                      <span className="text-base">👤</span>
+                      <span className="text-sm font-bold uppercase tracking-wider">AI 学员人设</span>
+                    </div>
+                    <button
+                      onClick={handleInferPersona}
+                      disabled={personaLoading}
+                      className="px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded disabled:opacity-50"
+                    >
+                      {personaLoading ? '推断中…' : selectedLead.persona ? '重新推断' : '一键推断'}
+                    </button>
+                  </div>
+
+                  {personaError && (
+                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">{personaError}</div>
+                  )}
+
+                  {selectedLead.persona ? (
+                    <div className="space-y-2.5 text-sm">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <PersonaTag label="年龄段" value={selectedLead.persona.ageBand} />
+                        <PersonaTag label="学历阶段" value={selectedLead.persona.educationStage} />
+                        <PersonaTag label="价格敏感" value={selectedLead.persona.priceSensitivity} />
+                        <PersonaTag label="决策窗口" value={selectedLead.persona.decisionWindow} />
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-bold text-purple-600 uppercase mb-0.5">职业</div>
+                        <div className="text-purple-900">{selectedLead.persona.occupation}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-bold text-purple-600 uppercase mb-0.5">主要痛点</div>
+                        <div className="text-purple-900">{selectedLead.persona.primaryPainPoint}</div>
+                      </div>
+                      <div className="p-3 bg-white border border-purple-200 rounded-lg">
+                        <div className="text-[10px] font-bold text-purple-600 uppercase mb-1">推荐话术（直接复制）</div>
+                        <div className="text-sm text-gray-800 leading-relaxed">{selectedLead.persona.recommendedScript}</div>
+                      </div>
+                      {selectedLead.persona.redFlags.length > 0 && (
+                        <div className="p-2 bg-amber-50 border border-amber-200 rounded">
+                          <div className="text-[10px] font-bold text-amber-700 mb-1">⚠️ 风险点</div>
+                          {selectedLead.persona.redFlags.map((f, i) => (
+                            <div key={i} className="text-xs text-amber-800">· {f}</div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-gray-500">
+                        置信度 {selectedLead.persona.confidence === 'high' ? '高' : selectedLead.persona.confidence === 'medium' ? '中' : '低'}
+                        · {selectedLead.persona.source === 'ai' ? 'Gemini 推断' : '规则推断'}
+                        · {new Date(selectedLead.persona.inferredAt).toLocaleString('zh-CN')}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      点「一键推断」让 AI 根据私信和跟进记录推断学员画像，给你直接可用的话术。
+                    </div>
+                  )}
+                </div>
+
                 <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-emerald-700">
@@ -1247,6 +1326,31 @@ export default function LeadManagement({ preset }: LeadManagementProps) {
           </>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+const PERSONA_LABELS: Record<string, string> = {
+  '20s': '20-29 岁',
+  '30s': '30-39 岁',
+  '40s+': '40 岁以上',
+  highschool: '高中/中专',
+  associate: '大专/在职',
+  bachelor: '本科',
+  low: '低敏感',
+  medium: '中敏感',
+  high: '高敏感',
+  within_week: '本周内',
+  within_month: '本月内',
+  browsing: '随便看看',
+  unknown: '待确认',
+};
+
+function PersonaTag({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between p-1.5 bg-white rounded border border-purple-100">
+      <span className="text-[10px] text-purple-500">{label}</span>
+      <span className="text-xs text-purple-900 font-medium">{PERSONA_LABELS[value] ?? value}</span>
     </div>
   );
 }

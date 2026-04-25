@@ -1,6 +1,6 @@
 # 招生智能体集群 - Product Spec
 
-> **当前版本：v3.4（2026-04-25）· 一线战斗力 + 续费保卫战 + 智能自愈**
+> **当前版本：v3.5（2026-04-25）· 新租户教练 + 销售雷达 + 失败兜底**
 > 完整迭代历史见 [Product-Spec-CHANGELOG.md](./Product-Spec-CHANGELOG.md)
 > 未来演进路径见 [Product-Spec-V3-Roadmap.md](./Product-Spec-V3-Roadmap.md)
 > 运维手册见 [Execute_Plan/Operator-Runbook.md](./Execute_Plan/Operator-Runbook.md)
@@ -13,6 +13,11 @@
 ---
 
 ## v2.2 状态快照
+
+v3.5 新增（2026-04-25 · 新租户教练 + 销售雷达 + 失败兜底）：
+- ✅ **7 日冷启动剧本**：每天聚焦 1 个任务（不是 checklist 的"该做什么"，是"今天只做这一件"）+ 进度条 + 当前焦点 + 💡 提示
+- ✅ **学员人设推断**：8 维（年龄/学历/职业/痛点/价格敏感/决策窗口/推荐话术/风险点）+ Gemini 优先 + 规则回退 + 紫色面板可一键复制话术
+- ✅ **失败 mission 接手区**：按 last_error 聚合 + 单条/批量重试 + 批量关闭，AgentWorkspace 新增折叠面板
 
 v3.4 新增（2026-04-25 · 一线战斗力 + 续费保卫战 + 智能自愈）：
 - ✅ **专员业绩仪表盘**：实时成交 + 提成估算（默认 8%）+ 团队排行榜（🥇🥈🥉 冠亚季）+ HomePanel teaser

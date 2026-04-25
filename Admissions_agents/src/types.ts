@@ -27,6 +27,20 @@ export type ContentStatus = 'draft' | 'pending' | 'approved' | 'published';
 
 // ===== 线索与学员 =====
 
+export interface LeadPersona {
+  ageBand: '20s' | '30s' | '40s+' | 'unknown';
+  educationStage: 'highschool' | 'associate' | 'bachelor' | 'unknown';
+  occupation: string;
+  primaryPainPoint: string;
+  priceSensitivity: 'low' | 'medium' | 'high' | 'unknown';
+  decisionWindow: 'within_week' | 'within_month' | 'browsing' | 'unknown';
+  recommendedScript: string;
+  redFlags: string[];
+  confidence: 'high' | 'medium' | 'low';
+  source: 'ai' | 'rule';
+  inferredAt: string;
+}
+
 export interface Lead {
   id: string;
   source: string;
@@ -40,6 +54,7 @@ export interface Lead {
   latestFollowupAt?: string | null;
   latestNextAction?: string | null;
   latestNextFollowupAt?: string | null;
+  persona?: LeadPersona | null;
 }
 
 export type StudentStatus = 'enrolled' | 'paid' | 'admitted' | 'studying' | 'graduated';

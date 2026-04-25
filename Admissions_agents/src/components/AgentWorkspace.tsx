@@ -243,6 +243,8 @@ function AgentWorkspace() {
       {/* 定时计划（方案 B · v3.2）*/}
       <ScheduleSection />
 
+      {/* 失败 mission 接手（v3.5.c）*/}
+      <FailedMissionsRescue onRefresh={() => void loadMissions()} />
 
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700 flex items-center gap-2">
@@ -826,6 +828,183 @@ function ScheduleSection() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// v3.5.c · 失败 mission 接手区
+type FailedMission = {
+  id: number;
+  type: string;
+  title: string;
+  status: string;
+  lastError: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  stepCount: number;
+};
+
+type ErrorBucket = {
+  errorKey: string;
+  errorSample: string;
+  count: number;
+  missionIds: number[];
+};
+
+function FailedMissionsRescue({ onRefresh }: { onRefresh: () => void }) {
+  const [missions, setMissions] = useState<FailedMission[]>([]);
+  const [buckets, setBuckets] = useState<ErrorBucket[]>([]);
+  const [working, setWorking] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    try {
+      const data = await authJson<{ missions: FailedMission[]; errorBuckets: ErrorBucket[] }>(
+        '/api/missions/failed/list?limit=100'
+      );
+      setMissions(data.missions);
+      setBuckets(data.errorBuckets);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载失败');
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (missions.length === 0 && !error) return null;
+
+  const retryOne = async (id: number) => {
+    setWorking(true);
+    try {
+      await authJson(`/api/missions/${id}/retry`, { method: 'POST' });
+      await load();
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重试失败');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const batchRetry = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    setWorking(true);
+    try {
+      await authJson('/api/missions/failed/batch-retry', {
+        method: 'POST',
+        body: JSON.stringify({ missionIds: ids }),
+      });
+      await load();
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '批量重试失败');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const batchDismiss = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    if (!window.confirm(`确认关闭 ${ids.length} 个失败 mission？关闭后视为人工放弃，不再处理。`)) return;
+    setWorking(true);
+    try {
+      await authJson('/api/missions/failed/batch-dismiss', {
+        method: 'POST',
+        body: JSON.stringify({ missionIds: ids }),
+      });
+      await load();
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '关闭失败');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full flex items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-red-600" />
+          <span className="text-sm font-semibold text-red-800">
+            失败 mission 接手区（{missions.length} 个待处理 · {buckets.length} 类错误）
+          </span>
+        </div>
+        <span className="text-xs text-red-600">{collapsed ? '展开' : '收起'} {collapsed ? '↓' : '↑'}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="mt-3 space-y-3">
+          {error && (
+            <div className="text-xs text-red-700 bg-white border border-red-200 rounded p-2">{error}</div>
+          )}
+
+          {/* 错误聚合 */}
+          {buckets.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-red-800">按错误聚合（点批量操作快速恢复）</div>
+              {buckets.map((b) => (
+                <div key={b.errorKey} className="p-2 bg-white border border-red-100 rounded">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-gray-900">
+                        {b.count} 个 mission 命中此错误
+                      </div>
+                      <div className="text-[11px] text-gray-600 mt-0.5 break-all line-clamp-2">{b.errorSample}</div>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => void batchRetry(b.missionIds)}
+                        disabled={working}
+                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] rounded disabled:opacity-50"
+                      >
+                        批量重试 ({b.missionIds.length})
+                      </button>
+                      <button
+                        onClick={() => void batchDismiss(b.missionIds)}
+                        disabled={working}
+                        className="px-2 py-0.5 bg-gray-500 hover:bg-gray-600 text-white text-[11px] rounded disabled:opacity-50"
+                      >
+                        关闭
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 单条列表 */}
+          <div className="space-y-1.5 max-h-60 overflow-y-auto">
+            {missions.slice(0, 20).map((m) => (
+              <div key={m.id} className="flex items-center justify-between gap-2 p-2 bg-white border border-red-100 rounded">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-gray-900 truncate">{m.title} <span className="text-gray-400 text-[10px]">#{m.id}</span></div>
+                  <div className="text-[11px] text-red-600 truncate">{m.lastError ?? '未知错误'}</div>
+                </div>
+                <button
+                  onClick={() => void retryOne(m.id)}
+                  disabled={working}
+                  className="shrink-0 px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] rounded disabled:opacity-50"
+                >
+                  重试
+                </button>
+              </div>
+            ))}
+            {missions.length > 20 && (
+              <div className="text-[11px] text-gray-500 text-center pt-1">
+                还有 {missions.length - 20} 条 · 用上方按错误聚合的批量操作处理
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

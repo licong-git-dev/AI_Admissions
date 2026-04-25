@@ -53,6 +53,7 @@ const HomePanel = lazy(() => import('./components/HomePanel'));
 const ValueStatementPanel = lazy(() => import('./components/ValueStatementPanel'));
 const ReferralCenter = lazy(() => import('./components/ReferralCenter'));
 const SpecialistPerformance = lazy(() => import('./components/SpecialistPerformance'));
+const ColdStartPlaybook = lazy(() => import('./components/ColdStartPlaybook'));
 
 type LeadPreset = {
   searchText?: string;
@@ -726,6 +727,18 @@ export default function App() {
                 className="h-full"
               >
                 <SpecialistPerformance />
+              </motion.div>
+            )}
+
+            {activeTab === 'cold-start' && (
+              <motion.div
+                key="cold-start"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full"
+              >
+                <ColdStartPlaybook onNavigate={(tab) => setActiveTab(tab)} />
               </motion.div>
             )}
           </AnimatePresence>

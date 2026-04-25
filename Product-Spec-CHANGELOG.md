@@ -1,5 +1,72 @@
 # 变更记录
 
+## [v3.5] - 2026-04-25 · 新租户教练 + 销售雷达 + 失败兜底
+
+> **业务洞察**：v3.4 把"基于数据采取行动"做了，但走完整套新租户路径会发现三个空白：
+> ① 新租户首周不知道每天该干什么（被动 checklist 无法替代主动剧本）
+> ② 专员跟单时不知道学员是谁（last_message 是给销售看的，不是给销售用的）
+> ③ AI mission 永久失败后老板没法接手（运维负担堆在老板身上）
+> **本迭代一句话**：让产品**会教学**（剧本）、让 AI **看得懂人**（人设）、让运维**有兜底**（接手）。
+
+### v3.5.a · 7 日冷启动剧本
+
+- **后端 API**（`server/src/routes/dashboard.ts`）：`GET /api/dashboard/cold-start-playbook`
+  - 用 `MIN(users.created_at) as tenantStartedAt` 算租户"年龄"，映射到 Day 1-7
+  - 7 天每天 1 个聚焦任务（不是 checklist 的"该做什么"，是"今天只做这一件"）
+  - 每个任务带 sub-checks（具体可验证的完成态）、whyItMatters（教用户为何这样做）、actionLabel/actionTab（一键跳转）
+- **前端页面**（`src/components/ColdStartPlaybook.tsx`）：
+  - 顶部进度条（已完成 N / 7）+ 当前焦点高亮
+  - 7 个任务卡片：完成态 emerald + 当前态 blue + 未来态 gray
+  - 每张卡片带"为什么这样做"小注解（💡 提示）
+- **新增 NAV**：`冷启动`（Compass 图标）
+
+#### 七日剧本节奏
+- Day 1：账号 + 院校 + 表单（最低 3 所院校 + 1 个专员 + 1 个表单）
+- Day 2：让小招写第一条 + 你审一眼（教用户测 AI 水平）
+- Day 3：接通推送（企微 OR RPA 任选其一即可起步）
+- Day 4：合规中心法务复审
+- Day 5：让小线扫一次高意向
+- Day 6：把每日战报 + 周报打开
+- Day 7：复盘 + 决定下一步打法
+
+### v3.5.b · 学员人设推断
+
+- **数据库**：`leads` 表加 `persona_json` + `persona_inferred_at` 两列（ALTER TABLE 兼容老租户）
+- **推断服务**（`server/src/services/lead-persona-inferer.ts`）：
+  - 输入：lead 基本信息 + 最近 10 条 followups
+  - Gemini 输出 8 维人设（年龄段 / 学历阶段 / 职业 / 痛点 / 价格敏感度 / 决策窗口 / 推荐话术 / 风险点 + 置信度）
+  - 规则回退：从词频识别价格敏感度 + 决策窗口 + 学历阶段，永远返回完整结构
+  - sanitize 严格校验枚举值，未知一律降级为 'unknown'
+- **路由**（`server/src/routes/leads.ts`）：
+  - `POST /:id/infer-persona` 触发推断
+  - `GET /:id/persona` 取已存的人设
+  - 列表 + 详情接口的 `toLead` 自动 attach persona
+- **LeadManagement 详情面板**：紫色渐变「👤 AI 学员人设」卡片
+  - 4 项 tag（年龄/学历/价格敏感/决策窗口）+ 职业 + 痛点
+  - 「推荐话术（直接复制）」白底高亮区
+  - ⚠️ 风险点（amber 警示）+ 置信度 / 来源 / 推断时间
+
+### v3.5.c · 失败 mission 接手
+
+- **后端 4 个新接口**（`server/src/routes/missions.ts`）：
+  - `GET /failed/list` 拉失败列表 + 按 `last_error` 前 60 字聚合成 errorBuckets
+  - `POST /:id/retry` 单条重置为 queued 重新入队
+  - `POST /failed/batch-retry` 批量重启（最多 100 条）
+  - `POST /failed/batch-dismiss` 批量关闭（标 canceled，summary='失败后人工关闭'）
+- **AgentWorkspace 新区**：失败 mission 接手区
+  - 默认折叠（无失败时不渲染）
+  - 错误按 last_error 聚合：「X 个 mission 命中此错误」+ 一键批量重试 / 一键关闭
+  - 单条列表 max 20 条 + 单独「重试」按钮
+  - 批量关闭有 confirm 二次确认
+
+### 度量目标
+
+- **v3.5.a**：新租户 Day 7 时 ≥ 60% 完成 5/7 个剧本任务（衡量首周参与度）
+- **v3.5.b**：人设推断后 24h 内 lead 转 contacted 状态比例 ≥ 普通流程 1.4 倍
+- **v3.5.c**：永久失败 mission 平均处理时长 < 24h（之前没有数据，目标拍）
+
+---
+
 ## [v3.4] - 2026-04-25 · 一线战斗力 + 续费保卫战 + 智能自愈
 
 > **业务洞察**：v3.3 把甲方/乙方/学员视角都做厚了，但「专员」这个一线角色还是只有一个孤零零的待办列表。同时 v3.3.b 的健康分只是"显示"，没有"行动"。

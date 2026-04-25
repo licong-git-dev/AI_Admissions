@@ -651,6 +651,12 @@ if (!columnExists('leads', 'referred_by_code')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_referred_by_code ON leads(referred_by_code)`);
 }
 
+// v3.5.b · AI 推断的学员人设（学历/年龄段/痛点/价格敏感度/决策周期 + 推荐话术）
+if (!columnExists('leads', 'persona_json')) {
+  db.exec(`ALTER TABLE leads ADD COLUMN persona_json TEXT`);
+  db.exec(`ALTER TABLE leads ADD COLUMN persona_inferred_at TEXT`);
+}
+
 const leadCount = db.prepare('SELECT COUNT(*) as count FROM leads').get() as { count: number };
 const contentCount = db.prepare('SELECT COUNT(*) as count FROM content_items').get() as { count: number };
 const schoolCount = db.prepare('SELECT COUNT(*) as count FROM schools').get() as { count: number };

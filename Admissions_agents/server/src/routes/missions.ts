@@ -354,3 +354,155 @@ missionsRouter.post('/:id/cancel', requireRole(['admin', 'tenant_admin']), (req:
   db.prepare(`UPDATE agent_missions SET status = 'canceled', summary = '手动取消', finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(mission.id);
   res.json({ success: true, data: { canceled: true }, error: null });
 });
+
+// v3.5.c · 失败 mission 列表（按 last_error 聚合 + 单条重试 + 批量重试 + 关闭）
+missionsRouter.get('/failed/list', (req: AuthedRequest, res) => {
+  const scope = getTenantScope(req);
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
+  const where = scope.isPlatformAdmin ? '' : `AND tenant = '${scope.tenant.replace(/'/g, "''")}'`;
+
+  type FailedRow = {
+    id: number; tenant: string; type: string; title: string; status: string;
+    last_error: string | null; finished_at: string | null; created_at: string;
+    step_count: number;
+  };
+  const rows = db.prepare(`
+    SELECT id, tenant, type, title, status, last_error, finished_at, created_at, step_count
+    FROM agent_missions
+    WHERE status = 'failed' ${where}
+    ORDER BY finished_at DESC, id DESC
+    LIMIT ?
+  `).all(limit) as FailedRow[];
+
+  // 按 last_error 前 60 字聚合
+  const buckets = new Map<string, { sample: string; count: number; missionIds: number[] }>();
+  for (const r of rows) {
+    const key = (r.last_error ?? '未知错误').slice(0, 60);
+    const bucket = buckets.get(key) ?? { sample: r.last_error ?? '未知错误', count: 0, missionIds: [] };
+    bucket.count += 1;
+    if (bucket.missionIds.length < 20) bucket.missionIds.push(r.id);
+    buckets.set(key, bucket);
+  }
+
+  const errorBuckets = Array.from(buckets.entries()).map(([key, v]) => ({
+    errorKey: key,
+    errorSample: v.sample,
+    count: v.count,
+    missionIds: v.missionIds,
+  })).sort((a, b) => b.count - a.count);
+
+  res.json({
+    success: true,
+    data: {
+      missions: rows.map((r) => ({
+        id: r.id,
+        tenant: r.tenant,
+        type: r.type,
+        title: r.title,
+        status: r.status,
+        lastError: r.last_error,
+        finishedAt: r.finished_at,
+        createdAt: r.created_at,
+        stepCount: r.step_count,
+      })),
+      errorBuckets,
+    },
+    error: null,
+  });
+});
+
+missionsRouter.post('/:id/retry', requireRole(['admin', 'tenant_admin']), (req: AuthedRequest, res) => {
+  const scope = getTenantScope(req);
+  const mission = db.prepare(`SELECT * FROM agent_missions WHERE id = ?`).get(req.params.id) as MissionRow | undefined;
+  if (!mission || (!scope.isPlatformAdmin && mission.tenant !== scope.tenant)) {
+    return res.status(404).json({ success: false, data: null, error: '任务不存在' });
+  }
+  if (mission.status !== 'failed') {
+    return res.status(400).json({ success: false, data: null, error: '仅失败的任务可重试' });
+  }
+
+  // 重置 mission 到 queued + 清掉 last_error
+  db.prepare(`
+    UPDATE agent_missions
+    SET status = 'queued', last_error = NULL, finished_at = NULL, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(mission.id);
+
+  enqueueJob({
+    name: 'agent.run_mission',
+    payload: { missionId: mission.id },
+    maxAttempts: 3,
+    singletonKey: `mission-retry:${mission.id}:${Date.now()}`,
+  });
+
+  res.json({ success: true, data: { missionId: mission.id, retried: true }, error: null });
+});
+
+missionsRouter.post('/failed/batch-retry', requireRole(['admin', 'tenant_admin']), (req: AuthedRequest, res) => {
+  const scope = getTenantScope(req);
+  const body = req.body as { missionIds?: number[] } | undefined;
+  const ids = Array.isArray(body?.missionIds) ? body!.missionIds.filter((x) => Number.isFinite(x)).slice(0, 100) : [];
+  if (ids.length === 0) {
+    return res.status(400).json({ success: false, data: null, error: 'missionIds 必填' });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  type Row = { id: number; tenant: string; status: string };
+  const targets = db.prepare(
+    `SELECT id, tenant, status FROM agent_missions WHERE id IN (${placeholders})`
+  ).all(...ids) as Row[];
+
+  const eligible = targets.filter((r) =>
+    r.status === 'failed' && (scope.isPlatformAdmin || r.tenant === scope.tenant)
+  );
+
+  let retried = 0;
+  for (const target of eligible) {
+    db.prepare(`
+      UPDATE agent_missions
+      SET status = 'queued', last_error = NULL, finished_at = NULL, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(target.id);
+
+    enqueueJob({
+      name: 'agent.run_mission',
+      payload: { missionId: target.id },
+      maxAttempts: 3,
+      singletonKey: `mission-retry:${target.id}:${Date.now()}`,
+    });
+    retried += 1;
+  }
+
+  res.json({ success: true, data: { retried, requested: ids.length, skipped: ids.length - retried }, error: null });
+});
+
+missionsRouter.post('/failed/batch-dismiss', requireRole(['admin', 'tenant_admin']), (req: AuthedRequest, res) => {
+  const scope = getTenantScope(req);
+  const body = req.body as { missionIds?: number[] } | undefined;
+  const ids = Array.isArray(body?.missionIds) ? body!.missionIds.filter((x) => Number.isFinite(x)).slice(0, 200) : [];
+  if (ids.length === 0) {
+    return res.status(400).json({ success: false, data: null, error: 'missionIds 必填' });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  type Row = { id: number; tenant: string; status: string };
+  const targets = db.prepare(
+    `SELECT id, tenant, status FROM agent_missions WHERE id IN (${placeholders})`
+  ).all(...ids) as Row[];
+
+  const eligible = targets.filter((r) =>
+    r.status === 'failed' && (scope.isPlatformAdmin || r.tenant === scope.tenant)
+  );
+
+  let dismissed = 0;
+  for (const target of eligible) {
+    db.prepare(`
+      UPDATE agent_missions
+      SET status = 'canceled', summary = '失败后人工关闭', updated_at = datetime('now')
+      WHERE id = ?
+    `).run(target.id);
+    dismissed += 1;
+  }
+
+  res.json({ success: true, data: { dismissed, requested: ids.length }, error: null });
+});
