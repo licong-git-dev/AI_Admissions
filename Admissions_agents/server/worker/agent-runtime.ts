@@ -136,12 +136,27 @@ const getSteps = (missionId: number): StepRow[] =>
 const buildContents = (mission: MissionRow, steps: StepRow[]): Array<Record<string, unknown>> => {
   const contents: Array<Record<string, unknown>> = [];
 
-  // user 发起：goal
+  // v3.7.a · 数据飞轮：按 mission type 注入对应 best-practice few-shot
+  let fewShot = '';
+  try {
+    const { buildFewShotBlock } = require('../src/services/best-practice-miner') as {
+      buildFewShotBlock: (kind: string, limit?: number) => string;
+    };
+    if (mission.type === 'daily_content_sprint') {
+      fewShot = buildFewShotBlock('content_top', 3);
+    } else if (mission.type === 'lead_followup_sweep') {
+      fewShot = buildFewShotBlock('script_top', 3);
+    }
+  } catch {
+    fewShot = '';
+  }
+
+  // user 发起：goal（带 few-shot）
   contents.push({
     role: 'user',
     parts: [
       {
-        text: `【任务】${mission.title}\n\n【目标参数】\n${mission.goal_json}\n\n请开始执行。`,
+        text: `【任务】${mission.title}\n\n【目标参数】\n${mission.goal_json}${fewShot ? '\n\n' + fewShot : ''}\n\n请开始执行。`,
       },
     ],
   });

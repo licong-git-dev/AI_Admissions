@@ -750,4 +750,148 @@ dashboardRouter.post('/value-statement/generate', async (req, res) => {
   }
 });
 
+// v3.7.c · 平台经营 OKR（仅甲方可见）
+dashboardRouter.get('/platform-okr', (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user) {
+    return res.status(401).json({ success: false, data: null, error: '需登录' });
+  }
+  const isPlatformAdmin = user.role === 'admin' && user.tenant === 'platform';
+  if (!isPlatformAdmin) {
+    return res.status(403).json({ success: false, data: null, error: '仅甲方可访问' });
+  }
+
+  // 1. 租户基本信息：总数 / 活跃 / 30/60/90 天留存
+  type CountRow = { c: number };
+  type AvgRow = { v: number | null };
+
+  const totalTenants = (db.prepare(
+    `SELECT COUNT(DISTINCT tenant) as c FROM users WHERE tenant != 'platform' AND is_active = 1`
+  ).get() as CountRow).c;
+
+  // 活跃定义：本月有线索/内容/任务任意一项写入
+  const activeTenants30d = (db.prepare(`
+    SELECT COUNT(DISTINCT tenant) as c FROM (
+      SELECT tenant FROM leads WHERE datetime(created_at) > datetime('now', '-30 days') AND tenant != 'platform'
+      UNION SELECT tenant FROM content_items WHERE datetime(created_at) > datetime('now', '-30 days') AND tenant != 'platform'
+      UNION SELECT tenant FROM agent_missions WHERE datetime(created_at) > datetime('now', '-30 days') AND tenant != 'platform'
+    )
+  `).get() as CountRow).c;
+
+  const tenantsBornWithin90d = (db.prepare(`
+    SELECT COUNT(DISTINCT tenant) as c FROM users
+    WHERE tenant != 'platform'
+      AND datetime(created_at) BETWEEN datetime('now', '-90 days') AND datetime('now', '-60 days')
+  `).get() as CountRow).c;
+
+  const tenantsRetained60d = tenantsBornWithin90d === 0 ? 0 : (db.prepare(`
+    SELECT COUNT(DISTINCT u.tenant) as c FROM users u
+    WHERE u.tenant != 'platform'
+      AND datetime(u.created_at) BETWEEN datetime('now', '-90 days') AND datetime('now', '-60 days')
+      AND u.tenant IN (
+        SELECT DISTINCT tenant FROM leads WHERE datetime(created_at) > datetime('now', '-30 days')
+        UNION SELECT DISTINCT tenant FROM agent_missions WHERE datetime(created_at) > datetime('now', '-30 days')
+      )
+  `).get() as CountRow).c;
+
+  // 2. 平台收入（commission_total）+ 学费总额
+  const revenueRow30d = db.prepare(`
+    SELECT
+      COALESCE(SUM(commission_amount), 0) as commission_fen,
+      COALESCE(SUM(commission_paid_amount), 0) as commission_paid_fen,
+      COALESCE(SUM(total_tuition), 0) as tuition_fen,
+      COUNT(*) as deals_count
+    FROM deals
+    WHERE datetime(signed_at) > datetime('now', '-30 days')
+  `).get() as { commission_fen: number; commission_paid_fen: number; tuition_fen: number; deals_count: number };
+
+  const revenueAllTime = db.prepare(`
+    SELECT
+      COALESCE(SUM(commission_amount), 0) as commission_fen,
+      COALESCE(SUM(commission_paid_amount), 0) as commission_paid_fen
+    FROM deals
+  `).get() as { commission_fen: number; commission_paid_fen: number };
+
+  // 3. CAC 估算：定金成本 + Gemini 估算成本（暂用 leads * 0.5 元，可 env 调）
+  const totalLeads30d = (db.prepare(
+    `SELECT COUNT(*) as c FROM leads WHERE datetime(created_at) > datetime('now', '-30 days') AND tenant != 'platform'`
+  ).get() as CountRow).c;
+  const aiCallCostPerLead = Number(process.env.PLATFORM_AI_COST_PER_LEAD_FEN ?? 50); // 默认 0.5 元
+  const platformCost30dFen = totalLeads30d * aiCallCostPerLead;
+
+  // 4. 平均 LTV（每个 enrolled 学员产出的平台分成 / 学员数）
+  const enrolledTotal = (db.prepare(
+    `SELECT COUNT(*) as c FROM leads WHERE status = 'enrolled' AND tenant != 'platform'`
+  ).get() as CountRow).c;
+  const avgLtvFen = enrolledTotal === 0 ? 0 : Math.round(revenueAllTime.commission_fen / enrolledTotal);
+
+  // 5. 健康分布：拉每租户最新 monthly_value_statement 的 health_grade
+  type GradeRow = { health_grade: string; c: number };
+  const gradeDistribution = db.prepare(`
+    WITH latest_per_tenant AS (
+      SELECT tenant, MAX(period) as max_p FROM monthly_value_statements GROUP BY tenant
+    )
+    SELECT m.health_grade, COUNT(*) as c
+    FROM monthly_value_statements m
+    INNER JOIN latest_per_tenant l ON l.tenant = m.tenant AND l.max_p = m.period
+    GROUP BY m.health_grade
+  `).all() as GradeRow[];
+
+  // 6. 投诉率聚合
+  const complaintAgg = db.prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(is_complaint) as complaints,
+      COALESCE(AVG(avg_score), 0) as avg_score
+    FROM student_evaluations
+  `).get() as { total: number; complaints: number; avg_score: number };
+
+  // 7. 数据飞轮规模
+  const bestPracticesActive = (db.prepare(
+    `SELECT COUNT(*) as c FROM best_practices WHERE is_active = 1`
+  ).get() as CountRow).c;
+
+  res.json({
+    success: true,
+    data: {
+      tenants: {
+        total: totalTenants,
+        active30d: activeTenants30d,
+        retentionRate60d: tenantsBornWithin90d === 0 ? null : Math.round((tenantsRetained60d / tenantsBornWithin90d) * 1000) / 10,
+        retentionCohort: tenantsBornWithin90d,
+      },
+      revenue: {
+        last30dCommissionYuan: Math.round(revenueRow30d.commission_fen / 100),
+        last30dCommissionPaidYuan: Math.round(revenueRow30d.commission_paid_fen / 100),
+        last30dTuitionYuan: Math.round(revenueRow30d.tuition_fen / 100),
+        last30dDealsCount: revenueRow30d.deals_count,
+        allTimeCommissionYuan: Math.round(revenueAllTime.commission_fen / 100),
+        allTimePaidYuan: Math.round(revenueAllTime.commission_paid_fen / 100),
+        unpaidYuan: Math.round((revenueAllTime.commission_fen - revenueAllTime.commission_paid_fen) / 100),
+      },
+      unitEconomics: {
+        cac30dYuan: Math.round(platformCost30dFen / 100),
+        leads30d: totalLeads30d,
+        cacPerLeadYuan: totalLeads30d === 0 ? 0 : Math.round(platformCost30dFen / totalLeads30d / 100 * 100) / 100,
+        avgLtvYuan: Math.round(avgLtvFen / 100),
+        ltvCacRatio: platformCost30dFen === 0 ? null : Math.round((avgLtvFen / Math.max(platformCost30dFen, 1)) * 10) / 10,
+      },
+      health: {
+        gradeDistribution: ['S', 'A', 'B', 'C', 'D'].map((g) => ({
+          grade: g,
+          count: gradeDistribution.find((r) => r.health_grade === g)?.c ?? 0,
+        })),
+        evaluationsTotal: complaintAgg.total,
+        complaintsTotal: complaintAgg.complaints,
+        complaintRate: complaintAgg.total === 0 ? 0 : Number(((complaintAgg.complaints / complaintAgg.total) * 100).toFixed(1)),
+        avgScore: Number(complaintAgg.avg_score.toFixed(2)),
+      },
+      flywheel: {
+        bestPracticesActive,
+      },
+    },
+    error: null,
+  });
+});
+
 export { dashboardRouter };

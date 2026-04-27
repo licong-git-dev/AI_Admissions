@@ -364,6 +364,24 @@ db.exec(`
     FOREIGN KEY (referrer_lead_id) REFERENCES leads (id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS best_practices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'platform',
+    kind TEXT NOT NULL,
+    source_id INTEGER,
+    title TEXT,
+    excerpt TEXT NOT NULL,
+    metric_views INTEGER NOT NULL DEFAULT 0,
+    metric_leads INTEGER NOT NULL DEFAULT 0,
+    metric_conversions INTEGER NOT NULL DEFAULT 0,
+    score REAL NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    last_scored_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(kind, source_id)
+  );
+
   CREATE TABLE IF NOT EXISTS student_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant TEXT NOT NULL DEFAULT 'default',
@@ -625,6 +643,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_student_evaluations_tenant ON student_evaluations(tenant);
   CREATE INDEX IF NOT EXISTS idx_student_evaluations_lead ON student_evaluations(lead_id);
   CREATE INDEX IF NOT EXISTS idx_student_evaluations_complaint ON student_evaluations(is_complaint);
+  CREATE INDEX IF NOT EXISTS idx_best_practices_kind_score ON best_practices(kind, score DESC);
+  CREATE INDEX IF NOT EXISTS idx_best_practices_active ON best_practices(is_active, kind);
 `);
 
 const columnExists = (table: string, column: string): boolean => {

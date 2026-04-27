@@ -1,5 +1,63 @@
 # 变更记录
 
+## [v3.7] - 2026-04-25 · 数据飞轮 + 沉默学员预警 + 平台经营 OKR
+
+> **业务洞察**：6 轮迭代后系统功能完整，但有一个**根本缺陷**：所有 AI 调用是无状态的。平台已沉淀大量爆款 content / 高转化 followup / 成交线索人设特征，但**从未回流给 AI**。每次内容生成、每次话术推荐都从冷启动开始 — 用户用 1 月和用 1 年体验差不多，**数据网络效应为零**。
+> **本迭代主题**：让 AI **越用越聪明**（数据飞轮）+ 让售后**不掉链子**（沉默预警）+ 让甲方**有战略仪表盘**（平台 OKR）。
+
+### v3.7.a · 数据飞轮（真正的网络效应护城河）
+
+- **数据库**（`server/src/db.ts`）：新建 `best_practices` 表
+  - `kind`（content_top / script_top / mission_goal_top）+ `source_id` + `score` + `metadata_json`
+  - `UNIQUE(kind, source_id)` 同条数据多次打分会 UPSERT
+  - 全平台共享（`tenant='platform'`），新租户开箱即享
+- **挖掘服务**（`server/src/services/best-practice-miner.ts`）：
+  - `mineTopContent`：内容工厂里 (views * 0.3 + leads * 5 + conversions * 20) 排前 20
+  - `mineTopScripts`：从导致 enrolled 的最后 followup 里挖（评分 = 长度 + 句号 + 含数字）
+  - `runBestPracticeMining` 是入口，每周一 03:00 跑一次
+  - `getActiveBestPractices(kind, limit)` 给 AI 注入用
+  - `buildFewShotBlock(kind, limit)` 拼成 Markdown few-shot 块
+- **定时 job**（`server/worker/job-handlers.ts`）：
+  - `best_practice.mining_tick` 每小时检查 → 命中周一 03:00 跑挖掘
+- **AI 注入**（`server/worker/agent-runtime.ts`）：
+  - `buildContents` 按 mission.type 注入对应 few-shot
+  - `daily_content_sprint` 注入 content_top
+  - `lead_followup_sweep` 注入 script_top
+  - 数据为空时退化到原 prompt（Day-1 不卡住）
+
+### v3.7.b · 沉默学员预警
+
+- **新定时 job**：`student_silence.alert_tick` 每天 09:00 扫一次
+  - 找已 enrolled 但 60+ 天没有任何 followup 也没更新 leads.updated_at 的学员
+  - 按租户聚合，每租户给 admin 推一条聚合提醒（前 10 名 + 总数）
+  - 「📊 小报」第一人称口吻 + 给老板明确建议
+- **业务价值**：
+  - 沉默 = 流失风险 + 退费风险 + 推荐意愿归零
+  - 60 天阈值卡在"还能挽救"的窗口（90 天通常已经晚）
+
+### v3.7.c · 平台经营 OKR（甲方专属）
+
+- **后端**：`GET /api/dashboard/platform-okr`（仅 platform admin）
+  - **Tenants**：总数 / 30 天活跃 / 60 天 cohort 留存率
+  - **Revenue**：累计应收 / 已付 / 未结 + 近 30 天数据
+  - **Unit Economics**：CAC（按 leads * `PLATFORM_AI_COST_PER_LEAD_FEN`）/ LTV / LTV-CAC 比
+  - **Health**：S/A/B/C/D 健康分布 + 学员均分 + 投诉率
+  - **Flywheel**：当前活跃 best_practices 数量
+- **前端**（`PlatformOKR.tsx`）：
+  - 顶部 4 个核心指标卡（活跃租户 / 收入 / LTV-CAC / 学员均分）
+  - 收入板块 6 stat
+  - 单经济板块 6 stat（含 LTV/CAC 比，<3 标红警告）
+  - 5 等级健康度分布卡（紫/绿/蓝/琥珀/红）
+- **NAV**：「平台 OKR」（BarChart3 图标，仅 platform admin 可见）
+
+### 度量目标
+
+- **v3.7.a**：30 天后 daily_content_sprint 生成内容质量评分 ≥ 之前 1.2 倍（间接通过 leads 衡量）
+- **v3.7.b**：触发预警的学员中 ≥ 30% 在 14 天内被顾问联系并恢复活跃
+- **v3.7.c**：甲方每周登录 PlatformOKR 至少 1 次（预设留存 cohort 健康追踪）
+
+---
+
 ## [v3.6] - 2026-04-25 · 学员声音 + 旅程时间线 + AI 员工自己的声音
 
 > **业务洞察**：6 轮迭代下来甲方/乙方/专员/学员 4 角色都有了入口，但 3 个**数据闭环**没关：

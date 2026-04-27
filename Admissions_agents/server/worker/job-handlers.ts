@@ -393,6 +393,104 @@ registerJobHandler('renewal.health_check_tick', async () => {
   return { tenantsChecked: latest.length, triggered };
 });
 
+// ============== v3.7.a 数据飞轮 ==============
+
+registerJobHandler('best_practice.mining_tick', async () => {
+  const now = new Date();
+  // 每周一 03:00 跑（UTC+8 时区下）
+  const isMonday = now.getDay() === 1;
+  const isThreeAM = now.getHours() === 3;
+  if (!isMonday || !isThreeAM) {
+    return { skipped: true, reason: 'not Mon 3am', day: now.getDay(), hour: now.getHours() };
+  }
+
+  const { runBestPracticeMining } = await import('../src/services/best-practice-miner');
+  const result = runBestPracticeMining();
+  logger.info('best_practice', '数据飞轮挖掘完成', result);
+  return result;
+});
+
+// ============== v3.7.b 沉默学员预警 ==============
+
+const SILENCE_THRESHOLD_DAYS = 60;
+
+registerJobHandler('student_silence.alert_tick', async () => {
+  const now = new Date();
+  // 每天 09:00 扫一次
+  if (now.getHours() !== 9) {
+    return { skipped: true, reason: 'not 9am', hour: now.getHours() };
+  }
+
+  // 找已成交但 60+ 天没有任何活动（无 followup / 无 portal 登录）的学员
+  type SilentRow = { id: number; nickname: string; tenant: string; assignee: string | null; last_activity: string };
+  const rows = db.prepare(`
+    SELECT
+      l.id, l.nickname, l.tenant, l.assignee,
+      COALESCE(
+        (SELECT MAX(created_at) FROM followups WHERE lead_id = l.id),
+        l.updated_at
+      ) as last_activity
+    FROM leads l
+    WHERE l.status = 'enrolled'
+      AND datetime(COALESCE(
+        (SELECT MAX(created_at) FROM followups WHERE lead_id = l.id),
+        l.updated_at
+      )) < datetime('now', '-' || ? || ' days')
+    LIMIT 200
+  `).all(SILENCE_THRESHOLD_DAYS) as SilentRow[];
+
+  if (rows.length === 0) {
+    return { silentStudents: 0, alerted: 0 };
+  }
+
+  // 按租户分组，每个租户一条聚合提醒
+  const byTenant = new Map<string, SilentRow[]>();
+  for (const row of rows) {
+    const arr = byTenant.get(row.tenant) ?? [];
+    arr.push(row);
+    byTenant.set(row.tenant, arr);
+  }
+
+  let alerted = 0;
+  for (const [tenant, students] of byTenant) {
+    // 找该租户的 admin
+    type AdminRow = { wechat_work_userid: string };
+    const admins = db.prepare(
+      `SELECT wechat_work_userid FROM users
+       WHERE tenant = ? AND role IN ('admin', 'tenant_admin')
+         AND wechat_work_userid IS NOT NULL AND is_active = 1`
+    ).all(tenant) as AdminRow[];
+
+    if (admins.length === 0) continue;
+
+    const list = students.slice(0, 10).map((s) => {
+      const days = Math.floor((Date.now() - new Date(s.last_activity).getTime()) / (24 * 60 * 60 * 1000));
+      return `· ${s.nickname}（${days} 天无动静${s.assignee ? '，对接 ' + s.assignee : ''}）`;
+    }).join('\n');
+
+    const text = [
+      `【沉默学员预警】（小报）`,
+      `老板，扫描发现 ${students.length} 个已成交学员超过 ${SILENCE_THRESHOLD_DAYS} 天无任何动静，先抽查前 ${Math.min(10, students.length)} 个：`,
+      ``,
+      list,
+      ``,
+      `沉默 = 流失风险 + 退费风险 + 推荐意愿归零，建议让顾问主动联系一遍。`,
+    ].join('\n');
+
+    for (const admin of admins) {
+      try {
+        await sendTextMessageToUser({ toUser: admin.wechat_work_userid, content: text });
+      } catch {
+        // ignore individual failures
+      }
+    }
+    alerted += 1;
+  }
+
+  logger.info('silence', '沉默学员预警发送完成', { silentStudents: rows.length, alerted });
+  return { silentStudents: rows.length, alerted };
+});
+
 // ============== Agent 数字员工 ==============
 
 registerJobHandler('agent.run_mission', async (payload: Record<string, unknown>, ctx: { jobId: number; attempt: number }) => {
@@ -617,6 +715,8 @@ const RECURRING_JOBS: RecurringJob[] = [
   { name: 'agent.daily_schedule_tick', intervalMs: 5 * 60 * 1000, maxAttempts: 1 },
   { name: 'value_statement.monthly_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
   { name: 'renewal.health_check_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
+  { name: 'best_practice.mining_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
+  { name: 'student_silence.alert_tick', intervalMs: 60 * 60 * 1000, maxAttempts: 1 },
 ];
 
 const lastEnqueuedAt = new Map<string, number>();

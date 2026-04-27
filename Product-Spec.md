@@ -1,6 +1,6 @@
 # 招生智能体集群 - Product Spec
 
-> **当前版本：v3.6（2026-04-25）· 学员声音 + 旅程时间线 + AI 员工各说各的**
+> **当前版本：v3.7（2026-04-25）· 数据飞轮 + 沉默学员预警 + 平台经营 OKR**
 > 完整迭代历史见 [Product-Spec-CHANGELOG.md](./Product-Spec-CHANGELOG.md)
 > 未来演进路径见 [Product-Spec-V3-Roadmap.md](./Product-Spec-V3-Roadmap.md)
 > 运维手册见 [Execute_Plan/Operator-Runbook.md](./Execute_Plan/Operator-Runbook.md)
@@ -13,6 +13,11 @@
 ---
 
 ## v2.2 状态快照
+
+v3.7 新增（2026-04-25 · 数据飞轮 + 沉默学员预警 + 平台经营 OKR）：
+- ✅ **数据飞轮**：best_practices 表 + 每周一 03:00 挖掘 top 爆款 content / 高转化 script，AI 生成时按 mission.type 注入 few-shot（daily_content_sprint → content_top；lead_followup_sweep → script_top）。新租户开箱即享全平台沉淀
+- ✅ **沉默学员预警**：每日 09:00 扫已 enrolled 但 60+ 天无活动学员，按租户聚合推送企微给老板，由「小报」口吻提醒
+- ✅ **平台 OKR 仪表盘**：甲方专属页 — 租户活跃/留存/cohort、累计收入/未结、LTV/CAC、健康分布、数据飞轮规模
 
 v3.6 新增（2026-04-25 · 学员声音 + 旅程时间线 + AI 员工各说各的）：
 - ✅ **学员评价系统**：5 维度打分 + 30 天防刷 + 任一项 ≤ 2 自动标投诉 + ComplianceCenter「学员评价」tab + 平台跨租户 at_risk 标记

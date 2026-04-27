@@ -21,6 +21,7 @@ import {
   Gift,
   Trophy,
   Compass,
+  BarChart3,
 } from 'lucide-react';
 
 export const NAV_ITEMS = [
@@ -36,6 +37,7 @@ export const NAV_ITEMS = [
   { id: 'compliance', label: '合规中心', icon: ShieldCheck },
   { id: 'management', label: '经营管理', icon: Briefcase },
   { id: 'cold-start', label: '冷启动', icon: Compass },
+  { id: 'platform-okr', label: '平台 OKR', icon: BarChart3 },
   { id: 'performance', label: '业绩榜', icon: Trophy },
   { id: 'value-statement', label: '价值账单', icon: Receipt },
   { id: 'referrals', label: '转介绍', icon: Gift },
